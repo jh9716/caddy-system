@@ -187,3 +187,81 @@ export function largeDraft(date = "2026-11-14"): AssignmentDraft {
     confirmedAt: null,
   };
 }
+
+/** 코스별 시작·간격 (분). 실제 운영처럼 코스마다 다르게 둔다 (스카이 8분, 나머지 7분, 시작 엇갈림). */
+export const FULL_LOAD_COURSE_PLAN: Record<ShiftPart, Record<CourseCode, { start: number; step: number }>> = {
+  "1부": {
+    VERTHILL: { start: 5 * 60 + 57, step: 7 },
+    SKY: { start: 6 * 60 + 0, step: 8 },
+    OCEAN: { start: 6 * 60 + 4, step: 7 },
+    LAKE: { start: 6 * 60 + 11, step: 7 },
+  },
+  "2부": {
+    VERTHILL: { start: 10 * 60 + 52, step: 7 },
+    SKY: { start: 11 * 60 + 0, step: 8 },
+    OCEAN: { start: 10 * 60 + 59, step: 7 },
+    LAKE: { start: 11 * 60 + 6, step: 7 },
+  },
+  "3부": {
+    VERTHILL: { start: 15 * 60 + 40, step: 7 },
+    SKY: { start: 15 * 60 + 44, step: 8 },
+    OCEAN: { start: 15 * 60 + 47, step: 7 },
+    LAKE: { start: 15 * 60 + 54, step: 7 },
+  },
+};
+
+export function fullLoadTeeTime(shift: ShiftPart, course: CourseCode, index: number): string {
+  const p = FULL_LOAD_COURSE_PLAN[shift][course];
+  return hhmm(p.start + p.step * index);
+}
+
+/**
+ * 1·2·3부 × 4코스 × 21팀 만석 (부당 84팀, 총 252팀).
+ * overflow: 특정 코스·부에 21팀 초과분을 추가 (잘림 검증용).
+ * teeSheet 포함: 실제 티 행 = 예약 시각과 동일 (+ emptyTees 에 지정한 빈 티).
+ */
+export function fullLoadDraft(opts?: {
+  date?: string;
+  overflow?: { shift: ShiftPart; course: CourseCode; extra: number }[];
+  emptyTees?: { shift: ShiftPart; course: CourseCode; index: number }[];
+}): AssignmentDraft {
+  const date = opts?.date ?? "2026-11-16";
+  const rows: AutoAssignmentRow[] = [];
+  const teeSheet: NonNullable<AssignmentDraft["teeSheet"]> = [];
+  const empty = new Set((opts?.emptyTees || []).map((e) => `${e.shift}|${e.course}|${e.index}`));
+  let id = 3000;
+  for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+    for (const course of COURSE_CODES) {
+      const extra = (opts?.overflow || []).find((o) => o.shift === shift && o.course === course)?.extra ?? 0;
+      for (let i = 0; i < 21 + extra; i++) {
+        const teeTime = fullLoadTeeTime(shift, course, i);
+        teeSheet.push({ course, shift, teeTime });
+        if (empty.has(`${shift}|${course}|${i}`)) continue;
+        const n = id++;
+        rows.push(
+          printRow({
+            date,
+            shift,
+            course,
+            teeTime,
+            caddyId: n,
+            caddyName: `${shift[0]}${course[0]}${synthName(n)}`,
+            teamName: `${shift}예약${course[0]}${i + 1}`,
+          })
+        );
+      }
+    }
+  }
+  return {
+    date,
+    status: "DRAFT",
+    assignments: rows,
+    unassignedReservations: [],
+    closedCourseReservations: [],
+    openCourses: [...COURSE_CODES],
+    caddyPool: [],
+    teeSheet,
+    sparesByShift: [],
+    confirmedAt: null,
+  };
+}

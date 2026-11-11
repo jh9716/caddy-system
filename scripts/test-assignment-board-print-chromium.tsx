@@ -25,7 +25,7 @@ import {
 import { buildBoardPrintSheet, type BoardPrintSheet } from "../src/lib/assignmentBoardPrint";
 import type { AssignmentDraft } from "../src/lib/assignmentDraft";
 import type { ShiftPart } from "../src/lib/reservationParser";
-import { emptyAndUnassignedDraft, largeDraft, threeShiftDraft } from "./fixtures/boardPrintFixtures";
+import { emptyAndUnassignedDraft, fullLoadDraft, largeDraft, threeShiftDraft } from "./fixtures/boardPrintFixtures";
 import { buildPublishedPayloadFromDraft } from "../src/lib/dailyBoardPublished";
 import type { DailyBoardDraftPayloadV1 } from "../src/lib/dailyBoardDraft";
 import { publishedBoardPrintDraft } from "../src/lib/publishedBoardPrint";
@@ -144,21 +144,21 @@ const LAYOUT_PROBE = `(() => {
   const visibleSiteUi = Array.from(document.querySelectorAll("[data-site-ui] *, [data-site-ui]"))
     .filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).length;
   const toolbar = document.querySelector(".bp-toolbar");
-  const table = document.querySelector(".bp-table");
-  const cells = Array.from(document.querySelectorAll(".bp-table th, .bp-table td"));
+  const table = document.querySelector(".bs-table");
+  const cells = Array.from(document.querySelectorAll(".bs-table th, .bs-table td"));
   const overflowCells = cells.filter((el) => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)
     .map((el) => (el.textContent || "").slice(0, 40));
   const escaped = [];
-  for (const td of document.querySelectorAll(".bp-cell")) {
+  for (const td of document.querySelectorAll(".bs-cell")) {
     const r = td.getBoundingClientRect();
-    for (const ch of td.querySelectorAll(".bp-name, .bp-affil, .bp-mark, .bp-team, .bp-vacant")) {
+    for (const ch of td.querySelectorAll(".bs-name, .bs-affil, .bs-mark, .bs-team, .bs-vacant")) {
       const c = ch.getBoundingClientRect();
       if (c.left < r.left - 0.5 || c.right > r.right + 0.5 || c.top < r.top - 0.5 || c.bottom > r.bottom + 0.5) escaped.push((ch.textContent || "").slice(0, 30));
     }
   }
-  const heads = Array.from(document.querySelectorAll(".bp-head-row th")).map((th) => { const r = th.getBoundingClientRect(); return { l: r.left, r: r.right, t: (th.textContent || "").trim() }; });
-  const rowHeights = Array.from(document.querySelectorAll(".bp-table tbody tr")).map((tr) => tr.getBoundingClientRect().height);
-  const theadH = document.querySelector(".bp-table thead").getBoundingClientRect().height;
+  const heads = Array.from(document.querySelectorAll("[data-sheet-course-head]")).map((th) => { const r = th.getBoundingClientRect(); return { l: r.left, r: r.right, t: (th.textContent || "").trim() }; });
+  const rowHeights = Array.from(document.querySelectorAll(".bs-table tbody tr")).map((tr) => tr.getBoundingClientRect().height);
+  const theadH = document.querySelector(".bs-table thead").getBoundingClientRect().height;
   return {
     vw, docScrollW: document.documentElement.scrollWidth, tableW: table.getBoundingClientRect().width,
     portalDisplay: getComputedStyle(portal).position, toolbarDisplay: getComputedStyle(toolbar).display,
@@ -176,7 +176,7 @@ function hasTool(bin: string): boolean {
   try { execFileSync("which", [bin], { stdio: "ignore" }); return true; } catch { return false; }
 }
 
-async function printCase(cdp: Cdp, name: string, sheet: BoardPrintSheet, opts: { forbidden?: string[]; required?: string[] } = {}) {
+async function printCase(cdp: Cdp, name: string, sheet: BoardPrintSheet, opts: { forbidden?: string[]; required?: string[]; pages?: number } = {}) {
   console.log(`[chromium] ${name}`);
   await load(cdp, pageHtml(sheet), PRINTABLE_W, PRINTABLE_H, "print");
   const p = await evaluate<Probe>(cdp, LAYOUT_PROBE);
@@ -185,7 +185,7 @@ async function printCase(cdp: Cdp, name: string, sheet: BoardPrintSheet, opts: {
   assert(p.docScrollW <= p.vw + 1 && p.tableW <= p.vw + 1, `${name}: 가로 넘침 없음 (표 ${Math.round(p.tableW)}px ≤ ${p.vw}px)`);
   assert(p.overflowCells.length === 0, `${name}: 칸 내용 넘침 없음${p.overflowCells.length ? " " + JSON.stringify(p.overflowCells.slice(0, 3)) : ""}`);
   assert(p.escaped.length === 0, `${name}: 이름·표시가 칸 밖으로 나가지 않음${p.escaped.length ? " " + JSON.stringify(p.escaped.slice(0, 3)) : ""}`);
-  const courseHeads = p.heads.slice(1);
+  const courseHeads = p.heads;
   assert(
     courseHeads.length === 4 && courseHeads.every((h, i) => i === 0 || h.l >= courseHeads[i - 1].r - 1),
     `${name}: 4코스 가로 배치·겹침 없음 (${courseHeads.map((h) => h.t.slice(0, 3)).join(" | ")})`
@@ -204,22 +204,27 @@ async function printCase(cdp: Cdp, name: string, sheet: BoardPrintSheet, opts: {
   const size = /Page size:\s+([\d.]+) x ([\d.]+)/.exec(info);
   assert(size && Number(size[1]) > Number(size[2]) && Math.abs(Number(size[1]) - 841.89) < 2, `${name}: PDF A4 가로 (${size?.[1]}x${size?.[2]}pt), ${pages}쪽`);
   const seen = new Map<string, number>();
+  // 코스별 실제 시각: 같은 시각이 여러 코스에 있으면 그 수만큼 나와야 한다
+  const expected = new Map<string, number>();
+  for (const c of sheet.courses) for (const sl of c.slots) expected.set(sl.teeTime, (expected.get(sl.teeTime) || 0) + 1);
   let headerOk = true;
   for (let i = 1; i <= pages; i++) {
     const t = execFileSync("pdftotext", ["-f", String(i), "-l", String(i), "-layout", pdfPath, "-"]).toString();
-    if (!["시간", "베르힐", "스카이", "오션", "레이크", sheet.shift, sheet.date].every((s) => t.includes(s))) headerOk = false;
-    for (const tr of sheet.rows) {
-      const n = t.split(tr.teeTime).length - 1;
-      if (n) seen.set(tr.teeTime, (seen.get(tr.teeTime) || 0) + n);
+    if (!["시각", "캐디", "베르힐", "스카이", "오션", "레이크", sheet.shift, sheet.date].every((s) => t.includes(s))) headerOk = false;
+    for (const tee of expected.keys()) {
+      const n = t.split(tee).length - 1;
+      if (n) seen.set(tee, (seen.get(tee) || 0) + n);
     }
     if (hasTool("pdftoppm")) {
       execFileSync("pdftoppm", ["-f", String(i), "-l", String(i), "-r", "110", "-png", "-singlefile", pdfPath, join(OUT, `${name}-p${i}`)]);
     }
   }
-  assert(headerOk, `${name}: 모든 쪽에 날짜·부·시간·4코스 머리글 반복`);
-  const missing = sheet.rows.filter((tr) => !seen.has(tr.teeTime)).map((tr) => tr.teeTime);
-  const dup = [...seen.entries()].filter(([, n]) => n > 1).map(([t]) => t);
-  assert(missing.length === 0 && dup.length === 0, `${name}: 티타임 ${sheet.rows.length}행 누락·중복 없음${missing.length || dup.length ? ` missing=${missing} dup=${dup}` : ""}`);
+  assert(headerOk, `${name}: 모든 쪽에 날짜·부·시각·캐디·4코스 머리글 반복`);
+  if (opts.pages != null) assert(pages === opts.pages, `${name}: ${sheet.rowCount}행 → A4 ${opts.pages}쪽 (실제 ${pages}쪽)`);
+  const slotsTotal = [...expected.values()].reduce((a, b) => a + b, 0);
+  const missing = [...expected.keys()].filter((t) => !seen.has(t));
+  const wrong = [...expected.entries()].filter(([t, n]) => (seen.get(t) || 0) !== n).map(([t]) => t);
+  assert(missing.length === 0 && wrong.length === 0, `${name}: 코스별 시각 ${slotsTotal}칸 누락·중복 없음${missing.length || wrong.length ? ` missing=${missing} wrong=${wrong.slice(0, 5)}` : ""}`);
   const all = execFileSync("pdftotext", ["-layout", pdfPath, "-"]).toString();
   if (opts.forbidden?.length) {
     const leaked = opts.forbidden.filter((s) => all.includes(s));
@@ -272,6 +277,18 @@ async function main() {
     // 5) 여러 쪽으로 넘어가는 큰 배치표 (2인 칸·긴 예약자명)
     const big = buildBoardPrintSheet(largeDraft(), "1부", { includeTeamName: true });
     await printCase(cdp, "large-multipage-1부", big);
+
+    // 5-b) 4코스 × 21팀 만석 × 1·2·3부: 각 부 A4 가로 1쪽
+    const full = fullLoadDraft();
+    for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+      const ownSet = new Set(full.assignments.filter((a) => a.reservation.shift === shift).map((a) => a.caddy.name));
+      const otherOnly = full.assignments.filter((a) => a.reservation.shift !== shift).map((a) => a.caddy.name);
+      await printCase(cdp, `full21-${shift}`, buildBoardPrintSheet(full, shift), { forbidden: otherOnly, required: [...ownSet], pages: 1 });
+    }
+    // 5-c) 21팀 초과 (오션 24팀): 잘림 없이 24행
+    const over = fullLoadDraft({ overflow: [{ shift: "2부", course: "OCEAN", extra: 3 }] });
+    const overOwn = new Set(over.assignments.filter((a) => a.reservation.shift === "2부").map((a) => a.caddy.name));
+    await printCase(cdp, "overflow24-2부", buildBoardPrintSheet(over, "2부"), { required: [...overOwn] });
 
     // 6) 모바일 미리보기 (390px, screen media, 화면 맞춤 zoom)
     console.log("[chromium] mobile preview");

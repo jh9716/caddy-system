@@ -40,3 +40,30 @@ export function publishedBoardPrintDraft(
 
 export const PUBLISHED_BOARD_PRINT_HINT =
   "확정·게시된 배치표만 인쇄합니다. 인쇄 창에서 용지 A4 · 가로 방향 · 배율 기본(100%)을 확인하세요.";
+
+/**
+ * /board 화면 표시용 draft. 서버가 이미 역할별로 거른 Published payload 를 그대로 반영한다.
+ * - teamName: 서버 응답에 있을 때만 (관리자·조장). 캐디/스태프 응답은 서버에서 이미 null → 노출 범위 변화 없음.
+ * - houseRequest: 기존 /board 의 하우스 표시 유지.
+ * 인쇄·이미지는 이 함수가 아니라 assignmentDraftFromPublishedPayload(teamName 항상 null)를 쓴다.
+ */
+export function assignmentDraftForPublishedView(
+  payload: DailyBoardPublishedPayloadV1
+): AssignmentDraft {
+  const base = assignmentDraftFromPublishedPayload(payload);
+  return {
+    ...base,
+    assignments: base.assignments.map((row, i) => {
+      const p = payload.placements[i];
+      if (!p) return row;
+      return {
+        ...row,
+        reservation: {
+          ...row.reservation,
+          teamName: p.teamName ?? null,
+          ...(p.houseRequest === true ? { houseRequest: true } : {}),
+        },
+      };
+    }),
+  };
+}

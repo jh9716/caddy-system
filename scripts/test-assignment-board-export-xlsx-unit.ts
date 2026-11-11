@@ -114,7 +114,22 @@ function cellAt(
 ): string {
   const sheet = sheets.find((s) => s.name === shift);
   const line = sheet?.rows.find((r) => r.teeTime === teeTime);
-  return line?.values[course] ?? "";
+  // 공통 시트 엑셀 칸 = "이름 N조 [표시]". 기존 단언(이름·표시)을 유지하려고 소속 조만 떼고 비교한다.
+  return stripAffiliation(line?.values[course] ?? "");
+}
+
+/** 공통 시트 칸 문자열에서 소속 조 표기(" 3조")만 제거 */
+function stripAffiliation(text: string): string {
+  if (process.env.XDBG && text) console.log("    [cell]", JSON.stringify(text));
+  return text
+    .split("\n")
+    .map((l) => l.replace(/^(\S+) [0-9]+조(?= |$)/, "$1"))
+    .join("\n");
+}
+
+/** 원문 칸 (소속 조 포함) */
+function rawCellAt(sheets: ParsedBoardExcelSheet[], shift: ShiftPart, teeTime: string, course: CourseCode): string {
+  return sheets.find((s) => s.name === shift)?.rows.find((r) => r.teeTime === teeTime)?.values[course] ?? "";
 }
 
 section("파일명 / Content-Disposition");
@@ -196,8 +211,9 @@ section("workbook 구조 / 빈 셀 / 닫힌 코스 / 1부만");
   assert(sheets[1].shiftLine === "부: 2부", "2부 라벨");
   assert(sheets[2].shiftLine === "부: 3부", "3부 라벨");
   assert(
-    sheets.every((s) => s.headers.slice(0, 5).join("|") === BOARD_XLSX_TABLE_HEADERS.join("|")),
-    "시간|베르힐|스카이|오션|레이크"
+    sheets.every((s) => s.headers.join("|") === BOARD_XLSX_TABLE_HEADERS.join("|")) &&
+      BOARD_XLSX_TABLE_HEADERS.join("|") === "No|베르힐||스카이||오션||레이크|",
+    "No|베르힐(시각·캐디)|스카이|오션|레이크 — 공통 시트 열 구조 (의도 변경: 기존 시간|4코스)"
   );
   assert(cellAt(sheets, "1부", "05:57", "VERTHILL") === "박지아", "베르힐 이름");
   assert(cellAt(sheets, "1부", "05:57", "SKY") === "강보미", "스카이 이름");
@@ -281,12 +297,14 @@ section("LOCK / 특수 / 지원 / linked pair 양쪽 sheet");
   const bytes = await writeBoardExportXlsxBytes(d);
   const sheets = await parseBoardExportWorkbook(bytes);
   assert(cellAt(sheets, "1부", "06:04", "VERTHILL") === "임형규 [1·2]", "1부 1·2");
-  assert(cellAt(sheets, "2부", "12:11", "VERTHILL") === "임형규 [1·2]", "2부 1·2 동일 캐디");
+  // 공통 시트 표시(화면 배지와 동일): 연속근무 뒷부에는 '투'가 함께 붙는다 (의도 변경)
+  assert(cellAt(sheets, "2부", "12:11", "VERTHILL") === "임형규 [투·1·2]", "2부 1·2 동일 캐디 (+투)");
   assert(cellAt(sheets, "2부", "13:00", "SKY") === cellAt(sheets, "3부", "17:00", "SKY"), "2·3 동일");
-  assert(cellAt(sheets, "1부", "07:00", "OCEAN") === cellAt(sheets, "3부", "17:10", "OCEAN"), "1·3 동일");
-  assert(cellAt(sheets, "1부", "07:20", "LAKE") === cellAt(sheets, "2부", "13:20", "LAKE"), "54홀 동일");
-  assert(cellAt(sheets, "1부", "08:00", "SKY") === "서포트 [지원·1·2]", "SUP12 1부");
-  assert(cellAt(sheets, "2부", "12:40", "SKY") === "서포트 [지원·1·2]", "SUP12 2부");
+  assert(cellAt(sheets, "1부", "07:00", "OCEAN") === "김일삼 [1·3]" && cellAt(sheets, "3부", "17:10", "OCEAN") === "김일삼 [투·1·3]", "1·3 동일 캐디 (뒷부 +투)");
+  assert(cellAt(sheets, "1부", "07:20", "LAKE") === "최오사 [54]" && cellAt(sheets, "2부", "13:20", "LAKE") === "최오사 [투·54]", "54홀 동일 캐디 (뒷부 +투)");
+  // 지원 배지: 화면·인쇄와 같은 짧은 배지(특) — 기존 엑셀 '지원' 문구에서 의도 변경
+  assert(cellAt(sheets, "1부", "08:00", "SKY") === "서포트 [특·1·2]", "SUP12 1부");
+  assert(cellAt(sheets, "2부", "12:40", "SKY") === "서포트 [투·특·1·2]", "SUP12 2부");
   const allCellText = sheets
     .flatMap((s) => s.rows.flatMap((r) => [r.teeTime, ...Object.values(r.values)]))
     .join("\n");
@@ -313,7 +331,7 @@ section("export source 안전장치 (호출/의존 금지)");
     assert(!/quickBoardMutation|replaceDailyOpsDuties/.test(src), `${name} mutation 없음`);
     assert(!/assignmentBoardCellEdit/.test(src), `${name} 직접편집 mutation 모듈 없음`);
   }
-  assert(/buildBoardExportSlice/.test(xlsx), "화면과 같은 buildBoardExportSlice");
+  assert(/buildBoardSheetModel/.test(xlsx), "/board·PNG·A4 와 같은 buildBoardSheetModel (의도 변경: 기존 buildBoardExportSlice)");
   assert(/bookType: "xlsx"/.test(xlsx), "실제 xlsx");
   assert(/import\("xlsx"\)/.test(xlsx), "xlsx는 dynamic import");
   assert(!/^import \* as XLSX from "xlsx";$/m.test(xlsx), "xlsx static import 없음");
@@ -404,7 +422,8 @@ section("2026-09-07 fixture 209/77/80/52");
     const names = list.map((a) =>
       cellAt(sheets, a.shift, a.reservation.teeTime, a.reservation.course as CourseCode)
     );
-    if (names.length === 2 && names[0] === names[1] && names[0].includes(list[0].caddy.name)) {
+    // 같은 캐디(이름) 양쪽 부. 뒷부 칸은 화면 배지처럼 '투'가 붙어 문자열 전체는 다를 수 있음
+    if (names.length === 2 && names[0].split(" ")[0] === names[1].split(" ")[0] && names[0].includes(list[0].caddy.name)) {
       pairOk += 1;
     }
   }
@@ -416,9 +435,10 @@ section("2026-09-07 fixture 209/77/80/52");
   assert(s1 === "박지아", "05:57 베르힐 박지아");
   assert(sOneTwo === "임형규 [1·2]", "06:04 베르힐 임형규 [1·2]");
   assert(sSky === "구본의 [1·2]", "06:04 스카이 구본의 [1·2]");
-  assert(cellAt(sheets, "2부", "12:11", "VERTHILL") === "임형규 [1·2]", "2부 pair 임형규");
-  assert(cellAt(sheets, "2부", "12:11", "SKY") === "구본의 [1·2]", "2부 pair 구본의");
-  assert(cellAt(sheets, "1부", "08:10", "SKY") === "손지연 [지원]", "손지연 [지원]");
+  assert(cellAt(sheets, "2부", "12:11", "VERTHILL") === "임형규 [투·1·2]", "2부 pair 임형규 (+투)");
+  assert(cellAt(sheets, "2부", "12:11", "SKY") === "구본의 [투·1·2]", "2부 pair 구본의 (+투)");
+  assert(cellAt(sheets, "1부", "08:10", "SKY") === "손지연 [특·1]", "손지연 [특·1] (지원 배지 = 화면·인쇄와 동일, 의도 변경)");
+  assert(rawCellAt(sheets, "1부", "05:57", "VERTHILL") === "박지아 1조", "원문 칸 = 이름 + 소속 조 (A4·PNG와 동일)");
   assert(!/�/.test(s1 + sOneTwo + sSky), "이름 깨짐 없음");
   assert(sheets.every((s) => !s.rows.some((r) => Object.values(r.values).some((v) => v.includes("�")))), "전 sheet 한글 정상");
 }
@@ -459,7 +479,8 @@ section("3부 빈 티타임 '-' / 미배정 구분 / 배정 수 불변");
   assert(slice.rows.some((r) => r.teeTime === "17:01"), "xlsx 축에 17:01 공석");
   const bytes = await writeBoardExportXlsxBytes(d);
   const sheets = await parseBoardExportWorkbook(bytes);
-  assert(cellAt(sheets, "3부", "16:33", "VERTHILL") === BOARD_EMPTY_CELL_MARK, "미배정 칸도 엑셀 빈칸");
+  // 요구사항: 예약은 있는데 캐디 없음 → "미배치" (의도 변경: 기존 엑셀은 빈칸)
+  assert(cellAt(sheets, "3부", "16:33", "VERTHILL") === "미배치", "미배정 칸 = 엑셀 '미배치'");
   assert(cellAt(sheets, "3부", "16:33", "SKY") === BOARD_EMPTY_CELL_MARK, "예약 없는 칸 빈 문자열");
   assert(cellAt(sheets, "3부", "17:01", "VERTHILL") === BOARD_EMPTY_CELL_MARK, "17:01 빈칸");
   assert(BOARD_EMPTY_CELL_MARK === "", "empty 표시 상수 빈 문자열");

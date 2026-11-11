@@ -1,10 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import {
-  BOARD_EXPORT_SHIFTS,
-  buildBoardExportSlice,
-} from "@/lib/assignmentBoardExport";
+import { BOARD_EXPORT_SHIFTS } from "@/lib/assignmentBoardExport";
+import { buildBoardSheetModel } from "@/lib/boardSheet";
 import {
   BOARD_EXPORT_MULTI_DOWNLOAD_BLOCKED,
   BOARD_EXPORT_MULTI_DOWNLOAD_HINT,
@@ -43,11 +41,12 @@ export function BoardImageExportMenu({
   }
 
   async function buildShiftFile(shift: ShiftPart): Promise<File> {
-    const slice = buildBoardExportSlice(draft, shift);
-    const blob = await renderBoardExportPng(slice);
+    // 인쇄·/board 와 같은 공통 시트 모델. 예약자명은 기본 제외(기존 이미지 정책 유지).
+    const model = buildBoardSheetModel(draft, shift);
+    const blob = await renderBoardExportPng(model);
     return makeBoardExportPngFile(
       blob,
-      boardExportPngFilename(slice.date, slice.shift)
+      boardExportPngFilename(model.date, model.shift)
     );
   }
 
@@ -56,7 +55,7 @@ export function BoardImageExportMenu({
     setBusy(true);
     closeMenu();
     try {
-      await exportAndDownloadShiftPng(buildBoardExportSlice(draft, shift));
+      await exportAndDownloadShiftPng(buildBoardSheetModel(draft, shift));
       onNotice(`${shift} PNG를 다운로드했습니다.`);
     } catch (e) {
       onNotice(e instanceof Error ? e.message : "PNG 다운로드에 실패했습니다.");

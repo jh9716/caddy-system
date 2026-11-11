@@ -4,15 +4,15 @@
 
 import { createRoot, type Root } from "react-dom/client";
 import { createElement } from "react";
-import { AssignmentBoardExportView } from "@/components/board/AssignmentBoardExportView";
-import {
-  boardExportPngFilename,
-  type BoardExportSlice,
-} from "@/lib/assignmentBoardExport";
+import { BoardSheetExportView } from "@/components/board/BoardSheetExportView";
+import { boardExportPngFilename } from "@/lib/assignmentBoardExport";
+import type { BoardSheetModel } from "@/lib/boardSheet";
 import type { ShiftPart } from "@/lib/reservationParser";
 
 export const BOARD_EXPORT_PIXEL_RATIO = 2;
-export const BOARD_EXPORT_WIDTH_PX = 720;
+/** A4 가로 297mm @96dpi. 인쇄·/board 와 같은 공통 시트를 그대로 캡처한다. */
+export const BOARD_EXPORT_WIDTH_PX = 1123;
+export const BOARD_EXPORT_BACKGROUND = "#ffffff";
 
 /** PNG 생성/메뉴 오픈 시에만 로드. 페이지 초기 bundle에서 제외. */
 export function loadHtmlToImage() {
@@ -37,7 +37,7 @@ async function waitForExportPaint() {
   });
 }
 
-export async function renderBoardExportPng(slice: BoardExportSlice): Promise<Blob> {
+export async function renderBoardExportPng(model: BoardSheetModel): Promise<Blob> {
   const host = document.createElement("div");
   host.setAttribute("data-board-export-host", "");
   host.style.cssText = [
@@ -47,14 +47,14 @@ export async function renderBoardExportPng(slice: BoardExportSlice): Promise<Blo
     `width:${BOARD_EXPORT_WIDTH_PX}px`,
     "pointer-events:none",
     "z-index:-1",
-    "background:#fbf7ee",
+    `background:${BOARD_EXPORT_BACKGROUND}`,
   ].join(";");
   document.body.appendChild(host);
 
   let root: Root | null = null;
   try {
     root = createRoot(host);
-    root.render(createElement(AssignmentBoardExportView, { slice }));
+    root.render(createElement(BoardSheetExportView, { model }));
     await waitForExportPaint();
     const node = host.querySelector("[data-board-export-root]");
     if (!(node instanceof HTMLElement)) {
@@ -63,7 +63,7 @@ export async function renderBoardExportPng(slice: BoardExportSlice): Promise<Blo
     const { toPng } = await loadHtmlToImage();
     const dataUrl = await toPng(node, {
       pixelRatio: BOARD_EXPORT_PIXEL_RATIO,
-      backgroundColor: "#fbf7ee",
+      backgroundColor: BOARD_EXPORT_BACKGROUND,
       cacheBust: true,
       width: BOARD_EXPORT_WIDTH_PX,
     });
@@ -148,9 +148,9 @@ export async function downloadBoardPngFilesSequentially(
   return { count: files.length, warnedBlocked };
 }
 
-export async function exportAndDownloadShiftPng(slice: BoardExportSlice) {
-  const blob = await renderBoardExportPng(slice);
-  downloadBoardPngBlob(blob, boardExportPngFilename(slice.date, slice.shift));
+export async function exportAndDownloadShiftPng(model: BoardSheetModel) {
+  const blob = await renderBoardExportPng(model);
+  downloadBoardPngBlob(blob, boardExportPngFilename(model.date, model.shift));
   return blob;
 }
 
