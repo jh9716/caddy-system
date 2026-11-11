@@ -38,12 +38,19 @@ final class NoticeFileDownloadPolicy {
                 return true;
             }
         }
-        return false;
+        return NoticeFileDownloadFlavorHosts.extraAllowed(normalized);
     }
 
     static String originHostFromPageUrl(String pageUrl) throws NoticeFileDownloadException {
         if (pageUrl == null || pageUrl.isEmpty()) {
-            return DEFAULT_HOST;
+            String fallback = NoticeFileDownloadFlavorHosts.fallbackHostWhenPageUrlMissing();
+            if (fallback == null) {
+                return DEFAULT_HOST;
+            }
+            if (fallback.isEmpty() || !isAllowedHost(fallback)) {
+                throw new NoticeFileDownloadException("invalid_url");
+            }
+            return fallback;
         }
         URI uri;
         try {

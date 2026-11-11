@@ -228,6 +228,10 @@ async function main() {
     "plugin does not navigate WebView"
   );
   assert(javaPolicy.includes('"www.verthill.kr"') && javaPolicy.includes('"verthill.kr"'), "Java hosts");
+  assert(
+    javaPolicy.includes("NoticeFileDownloadFlavorHosts.extraAllowed"),
+    "policy delegates debug extra hosts"
+  );
   assert(javaPolicy.includes("/api/notice/"), "Java path prefix");
   assert(javaPolicy.includes("download=1"), "forces attachment query");
   assert(plugin.includes('call.getString("path"') && plugin.includes('call.getString("filename"'), "path+name only");

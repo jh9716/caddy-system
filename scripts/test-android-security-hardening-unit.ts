@@ -216,6 +216,20 @@ async function main() {
   const noticePlugin = read(
     "android/app/src/main/java/kr/verthill/caddy/notice/NoticeFileDownloadPlugin.java"
   );
+  const debugHosts = read(
+    "android/app/src/debug/java/kr/verthill/caddy/notice/NoticeFileDownloadFlavorHosts.java"
+  );
+  const releaseHosts = read(
+    "android/app/src/release/java/kr/verthill/caddy/notice/NoticeFileDownloadFlavorHosts.java"
+  );
+  assert(
+    debugHosts.includes("vercel.app") && !releaseHosts.includes("vercel.app"),
+    "Preview hosts exist only in the debug FlavorHosts class"
+  );
+  assert(
+    !cfg.includes("vercel.app") && cfg.includes('url: "https://www.verthill.kr"'),
+    "Release Capacitor server.url stays www.verthill.kr"
+  );
   assert(
     noticePlugin.includes("CookieManager.getInstance().getCookie") &&
       !noticePlugin.includes("getString(\"url\"") &&
