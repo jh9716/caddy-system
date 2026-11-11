@@ -126,6 +126,8 @@
     "test:assignment-board-sticky-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-board-sticky-unit.ts",
     "test:assignment-board-sticky-chromium": "bash scripts/tsx-safe.sh scripts/test-assignment-board-sticky-chromium.ts",
     "test:assignment-board-layout-chromium": "bash scripts/tsx-safe.sh scripts/test-assignment-board-layout-chromium.ts",
+    "test:assignment-board-print-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-board-print-unit.tsx",
+    "test:assignment-board-print-chromium": "bash scripts/tsx-safe.sh scripts/test-assignment-board-print-chromium.tsx",
     "test:daily-staffing-summary-unit": "bash scripts/tsx-safe.sh scripts/test-daily-staffing-summary-unit.ts",
     "test:assignment-confirm-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-confirm-unit.ts",
     "test:assignment-draft-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-draft-unit.ts",

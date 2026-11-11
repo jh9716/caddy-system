@@ -1,0 +1,189 @@
+/**
+ * 배치표 A4 인쇄 테스트 전용 합성 fixture. 앱 코드(src/)에서 import 하지 않는다.
+ * 이름·팀명은 모두 합성값이다.
+ */
+import type { AssignmentDraft } from "../../src/lib/assignmentDraft";
+import type { AssignmentKind, AutoAssignmentRow } from "../../src/lib/autoAssignEngine";
+import { COURSE_CODES, type CourseCode, type ShiftPart } from "../../src/lib/reservationParser";
+
+const SURNAMES = ["김", "이", "박", "최", "정", "강", "조", "윤", "장", "임", "한", "오", "서", "신", "권"];
+const GIVEN = ["가람", "나래", "다은", "라희", "마루", "바다", "사랑", "아름", "자연", "차미", "하늘", "보람", "새봄", "슬기", "온유", "예린"];
+
+export function synthName(i: number): string {
+  return `${SURNAMES[i % SURNAMES.length]}${GIVEN[Math.floor(i / SURNAMES.length) % GIVEN.length]}`;
+}
+
+function hhmm(total: number): string {
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+export function printRow(input: {
+  date: string;
+  shift: ShiftPart;
+  course: CourseCode;
+  teeTime: string;
+  caddyId: number;
+  caddyName: string;
+  team?: string;
+  kind?: AssignmentKind;
+  teamName?: string | null;
+  limousineCart?: boolean;
+  houseRequest?: boolean;
+  pairId?: string | null;
+  reason?: string;
+}): AutoAssignmentRow {
+  return {
+    date: input.date,
+    shift: input.shift,
+    sequenceIndex: 0,
+    reason: input.reason ?? "TEST",
+    kind: input.kind ?? "regular",
+    pairId: input.pairId ?? null,
+    reservation: {
+      id: `${input.shift}-${input.course}-${input.teeTime}-${input.caddyId}`,
+      date: input.date,
+      course: input.course,
+      shift: input.shift,
+      teeTime: input.teeTime,
+      teamName: input.teamName ?? null,
+      rawRowIndex: 1,
+      ...(input.limousineCart ? { limousineCart: true } : {}),
+      ...(input.houseRequest ? { houseRequest: true } : {}),
+    },
+    caddy: {
+      id: input.caddyId,
+      name: input.caddyName,
+      team: input.team ?? `${(input.caddyId % 9) + 1}조`,
+      teamOrder: 1,
+    },
+  };
+}
+
+/** 부마다 다른 이름/팀명 접두사로 "부 섞임"을 검출할 수 있는 3부 draft */
+export function threeShiftDraft(date = "2026-11-12"): AssignmentDraft {
+  const rows: AutoAssignmentRow[] = [];
+  const bands: Record<ShiftPart, [number, number]> = {
+    "1부": [6 * 60 + 30, 8 * 60 + 40],
+    "2부": [11 * 60 + 30, 13 * 60 + 40],
+    "3부": [16 * 60, 17 * 60 + 10],
+  };
+  let id = 1;
+  for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+    const [start, end] = bands[shift];
+    for (let t = start; t <= end; t += 7) {
+      for (const course of COURSE_CODES) {
+        const n = id++;
+        rows.push(
+          printRow({
+            date,
+            shift,
+            course,
+            teeTime: hhmm(t),
+            caddyId: n,
+            caddyName: synthName(n),
+            teamName: `${shift}팀${course[0]}${hhmm(t).replace(":", "")}`,
+            limousineCart: n % 11 === 0,
+            houseRequest: n % 13 === 0,
+          })
+        );
+      }
+    }
+  }
+  return {
+    date,
+    status: "DRAFT",
+    assignments: rows,
+    unassignedReservations: [],
+    closedCourseReservations: [],
+    openCourses: [...COURSE_CODES],
+    caddyPool: [],
+    sparesByShift: [
+      { shift: "1부", spare1: { caddyId: 900, name: "일스페어", team: "1조", teamOrder: 1 }, spare2: null },
+      { shift: "2부", spare1: { caddyId: 901, name: "이스페어", team: "2조", teamOrder: 1 }, spare2: { caddyId: 902, name: "이보조", team: "3조", teamOrder: 1 } },
+      { shift: "3부", spare1: null, spare2: null },
+    ],
+    confirmedAt: null,
+  };
+}
+
+/** 스카이 휴장 + 오션 예약 없음 + 미배치 예약 + 빈 캐디 placeholder */
+export function emptyAndUnassignedDraft(date = "2026-11-13"): AssignmentDraft {
+  const shift: ShiftPart = "2부";
+  const rows: AutoAssignmentRow[] = [];
+  const times = ["11:30", "11:37", "11:44", "11:51", "11:58", "12:05"];
+  times.forEach((tee, i) => {
+    rows.push(printRow({ date, shift, course: "VERTHILL", teeTime: tee, caddyId: 100 + i, caddyName: synthName(100 + i) }));
+    if (i % 2 === 0) {
+      rows.push(printRow({ date, shift, course: "LAKE", teeTime: tee, caddyId: 200 + i, caddyName: synthName(200 + i) }));
+    }
+  });
+  // 셀 편집으로 생긴 빈 캐디 칸 (id 0, 이름 없음)
+  rows.push({
+    ...printRow({ date, shift, course: "LAKE", teeTime: "11:37", caddyId: 0, caddyName: "" }),
+    reason: "UNASSIGNED_VACANT",
+  });
+  return {
+    date,
+    status: "DRAFT",
+    assignments: rows,
+    unassignedReservations: [
+      {
+        reservation: { id: "u1", date, course: "LAKE", shift, teeTime: "11:51", teamName: "미배치합성팀", rawRowIndex: 1 },
+        reason: "NO_CADDY",
+      },
+      {
+        reservation: { id: "u2", date, course: "VERTHILL", shift, teeTime: "12:12", teamName: null, rawRowIndex: 2 },
+        reason: "NO_CADDY",
+      },
+    ],
+    closedCourseReservations: [],
+    openCourses: ["VERTHILL", "OCEAN", "LAKE"],
+    caddyPool: [],
+    sparesByShift: [],
+    confirmedAt: null,
+  };
+}
+
+/** 여러 페이지로 넘어가는 큰 1부 (05:30~10:20, 2인 칸·긴 예약자명 포함) */
+export function largeDraft(date = "2026-11-14"): AssignmentDraft {
+  const shift: ShiftPart = "1부";
+  const rows: AutoAssignmentRow[] = [];
+  let id = 1000;
+  const kinds: AssignmentKind[] = ["regular", "oneTwo", "twoThree", "fiftyFourHole"];
+  for (let t = 5 * 60 + 30; t <= 10 * 60 + 20; t += 7) {
+    for (const course of COURSE_CODES) {
+      const n = id++;
+      rows.push(
+        printRow({
+          date,
+          shift,
+          course,
+          teeTime: hhmm(t),
+          caddyId: n,
+          caddyName: synthName(n),
+          kind: kinds[n % 7 === 0 ? 1 + (n % 3) : 0],
+          teamName: n % 5 === 0 ? `아주긴합성예약자명테스트팀${n}외3명` : `합성팀${n}`,
+          limousineCart: n % 6 === 0,
+          houseRequest: n % 9 === 0,
+        })
+      );
+      if (n % 8 === 0) {
+        const m = id++;
+        rows.push(
+          printRow({ date, shift, course, teeTime: hhmm(t), caddyId: m, caddyName: synthName(m), teamName: `합성팀${n}`, pairId: `p${n}` })
+        );
+      }
+    }
+  }
+  return {
+    date,
+    status: "DRAFT",
+    assignments: rows,
+    unassignedReservations: [],
+    closedCourseReservations: [],
+    openCourses: [...COURSE_CODES],
+    caddyPool: [],
+    sparesByShift: [{ shift, spare1: { caddyId: 1, name: "합성스페어", team: "1조", teamOrder: 1 }, spare2: null }],
+    confirmedAt: null,
+  };
+}

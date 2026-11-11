@@ -56,6 +56,7 @@ import {
 } from "@/lib/assignmentBoardWorkbook";
 import { LazyBoardExcelExportButton } from "@/components/board/LazyBoardExcelExportButton";
 import { LazyBoardImageExportMenu } from "@/components/board/LazyBoardImageExportMenu";
+import { LazyBoardPrintButton } from "@/components/board/LazyBoardPrintButton";
 import { formatCaddyLabel, caddyAffiliation } from "@/lib/caddyDisplay";
 import {
   formatPublishedAt,
@@ -4628,6 +4629,11 @@ export default function ManageAssignmentsOpsPage() {
                 <div className="ops-board-tools-end">
                   <LazyBoardImageExportMenu draft={draft} onNotice={showToast} />
                   <LazyBoardExcelExportButton draft={draft} onNotice={showToast} />
+                  <LazyBoardPrintButton
+                    draft={draft}
+                    shift={shiftTab}
+                    onNotice={showToast}
+                  />
                   <button
                     type="button"
                     className="ops-add-team"
