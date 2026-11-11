@@ -325,9 +325,10 @@ async function main() {
     assert(schema.includes("model NoticePhoto"), "NoticePhoto additive model");
     assert(NOTICE_PUSH_TITLE === "VERTHILL 새 공지", "push title is 새 공지");
     const form = read("src/app/notice/new/ui/NewNoticeForm.tsx");
+    const publishFields = read("src/components/notice/NoticePublishWindowFields.tsx");
     assert(form.includes("useState(mode !== 'edit')"), "create sendPush defaults on");
     assert(form.includes("NOTICE_EDIT_SEND_PUSH_LABEL"), "edit sendPush is explicit");
-    assert(form.includes("NOTICE_SCHEDULED_PUSH_HINT"), "scheduled start hides auto-push");
+    assert(publishFields.includes("NOTICE_SCHEDULED_PUSH_HINT"), "scheduled start hides auto-push");
     assert(form.includes("planNoticeClientAutoPush"), "create defers push until photos succeed");
     assert(form.includes("sendAfterPhotos"), "photos-then-push path exists");
     assert(form.includes("자동 푸시는 보내지 않았습니다"), "photo upload fail skips auto push");
@@ -356,7 +357,8 @@ async function main() {
     );
     assert(NOTICE_PUSH_SEND_BUTTON === "공지 푸시 알림 보내기", "manual send copy");
     assert(NOTICE_PUSH_DONE_LABEL === "푸시 발송 완료", "sent copy");
-    assert(NOTICE_SCHEDULED_PUSH_HINT.includes("게시 후 수동 발송"), "scheduled hint");
+    assert(NOTICE_SCHEDULED_PUSH_HINT.includes("게시 시작 이후"), "scheduled hint");
+    assert(NOTICE_SCHEDULED_PUSH_HINT.includes("수동 발송"), "scheduled hint says 수동 발송");
     const autoPush = read("src/lib/noticeAutoPush.ts");
     assert(!autoPush.includes("cron"), "auto push has no cron");
     const mig = read("prisma/migrations/20260918120000_notice_v2/migration.sql");
@@ -1071,6 +1073,46 @@ async function main() {
           houseViewer
         ),
         "window null visible"
+      );
+      const endExact = new Date("2026-11-12T00:00:00+09:00");
+      assert(
+        canViewNotice(
+          {
+            targetType: "ALL",
+            targetValue: null,
+            publishStartAt: new Date("2026-11-11T00:00:00+09:00"),
+            publishEndAt: endExact,
+          },
+          houseViewer,
+          new Date("2026-11-11T23:59:59+09:00")
+        ),
+        "same-day end still visible before exclusive boundary"
+      );
+      assert(
+        !canViewNotice(
+          {
+            targetType: "ALL",
+            targetValue: null,
+            publishStartAt: new Date("2026-11-11T00:00:00+09:00"),
+            publishEndAt: endExact,
+          },
+          houseViewer,
+          endExact
+        ),
+        "hidden at exclusive next-day 00:00"
+      );
+      assert(
+        canViewNotice(
+          {
+            targetType: "ALL",
+            targetValue: null,
+            publishStartAt: new Date("2026-11-20T00:00:00+09:00"),
+            publishEndAt: null,
+          },
+          { role: "admin", caddyId: null, caddyType: null, team: null },
+          new Date("2026-11-11T12:00:00+09:00")
+        ),
+        "admin sees scheduled notice"
       );
     }
 

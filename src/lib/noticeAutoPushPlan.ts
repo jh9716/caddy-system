@@ -3,6 +3,8 @@
  * No Prisma, no FCM, no secrets.
  */
 
+import { parseNoticePublishInstant } from "@/lib/noticePublishWindow";
+
 export type NoticeClientAutoPushPlan = {
   scheduled: boolean;
   sendOnCreate: boolean;
@@ -10,10 +12,7 @@ export type NoticeClientAutoPushPlan = {
 };
 
 export function parseNoticeDateTime(value: string | Date | null | undefined): Date | null {
-  if (!value) return null;
-  const dt = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(dt.getTime())) return null;
-  return dt;
+  return parseNoticePublishInstant(value);
 }
 
 export function isFutureNoticeStart(

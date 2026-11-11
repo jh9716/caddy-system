@@ -6,12 +6,24 @@ import {
   NOTICE_CADDY_TYPES,
   NOTICE_CREATE_SEND_PUSH_LABEL,
   NOTICE_EDIT_SEND_PUSH_LABEL,
-  NOTICE_SCHEDULED_PUSH_HINT,
   NOTICE_TARGET_ALL,
   NOTICE_TARGET_CADDY_TYPE,
   NOTICE_TARGET_TEAM,
+  type NoticePublishMode,
+  type NoticePublishQuickRange,
 } from '@/lib/noticeConstants'
 import { isFutureNoticeStart, planNoticeClientAutoPush } from '@/lib/noticeAutoPushPlan'
+import {
+  applyNoticePublishMode,
+  inferNoticePublishMode,
+  noticePublishStatus,
+  noticeQuickRangeWindow,
+  parseNoticePublishInstant,
+  serializeNoticeDatetimeLocal,
+  startIsAfterEnd,
+  toNoticeDatetimeLocalValue,
+} from '@/lib/noticePublishWindow'
+import NoticePublishWindowFields from '@/components/notice/NoticePublishWindowFields'
 import { requestNoticePushSend } from '@/lib/noticePushClient'
 import { DRIVING_POOL_TEAM, PRIMARY_TEAMS } from '@/lib/caddyManage'
 import {
@@ -68,14 +80,6 @@ type Props = {
   }
 }
 
-function toDatetimeLocalValue(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const dt = new Date(iso)
-  if (Number.isNaN(dt.getTime())) return ''
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`
-}
-
 function pushResultMessage(push: {
   ok?: boolean
   skipped?: string | null
@@ -111,10 +115,16 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   const [targetType, setTargetType] = useState(initial?.targetType ?? NOTICE_TARGET_ALL)
   const [targetValue, setTargetValue] = useState(initial?.targetValue ?? '')
   const [publishStartAt, setPublishStartAt] = useState(
-    toDatetimeLocalValue(initial?.publishStartAt)
+    toNoticeDatetimeLocalValue(initial?.publishStartAt)
   )
   const [publishEndAt, setPublishEndAt] = useState(
-    toDatetimeLocalValue(initial?.publishEndAt)
+    toNoticeDatetimeLocalValue(initial?.publishEndAt)
+  )
+  const [publishMode, setPublishMode] = useState<NoticePublishMode>(() =>
+    inferNoticePublishMode({
+      publishStartAt: parseNoticePublishInstant(initial?.publishStartAt),
+      publishEndAt: parseNoticePublishInstant(initial?.publishEndAt),
+    })
   )
   const [sendPush, setSendPush] = useState(mode !== 'edit')
   const [busy, setBusy] = useState(false)
@@ -137,7 +147,14 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   )
   const [pendingFiles, setPendingFiles] = useState<NoticePendingFile[]>([])
   const isEdit = mode === 'edit'
-  const scheduled = isFutureNoticeStart(publishStartAt || null)
+  const startInstant = parseNoticePublishInstant(publishStartAt || null)
+  const endInstant = parseNoticePublishInstant(publishEndAt || null)
+  const scheduled = isFutureNoticeStart(startInstant)
+  const publishStatus = noticePublishStatus({
+    publishStartAt: publishMode === 'always' ? null : startInstant,
+    publishEndAt: publishMode === 'always' ? null : endInstant,
+  })
+  const invalidWindow = startIsAfterEnd(startInstant, endInstant)
   busyRef.current = busy
   existingCountRef.current = existingPhotos.length
   const totalPhotos = existingPhotos.length + pending.length
@@ -161,6 +178,24 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   function syncPending(next: NoticePendingPick[]) {
     pendingRef.current = next
     setPending(next)
+  }
+
+  function applyPublishFields(next: { publishStartAt: Date | null; publishEndAt: Date | null }) {
+    setPublishStartAt(toNoticeDatetimeLocalValue(next.publishStartAt))
+    setPublishEndAt(toNoticeDatetimeLocalValue(next.publishEndAt))
+  }
+
+  function onPublishModeChange(next: NoticePublishMode) {
+    const applied = applyNoticePublishMode(
+      next,
+      { publishStartAt: startInstant, publishEndAt: endInstant }
+    )
+    setPublishMode(next)
+    applyPublishFields(applied)
+  }
+
+  function onQuickRange(key: NoticePublishQuickRange) {
+    applyPublishFields(noticeQuickRangeWindow(key))
   }
 
   function photoRoomLeft() {
@@ -389,11 +424,48 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
       }
 
       setSaveProgress('공지 저장 중…')
+      let startIso: string | null = null
+      let endIso: string | null = null
+      if (publishMode === 'always') {
+        startIso = null
+        endIso = null
+      } else if (publishMode === 'today') {
+        const today = applyNoticePublishMode('today', {
+          publishStartAt: null,
+          publishEndAt: null,
+        })
+        startIso = today.publishStartAt ? today.publishStartAt.toISOString() : null
+        endIso = today.publishEndAt ? today.publishEndAt.toISOString() : null
+      } else {
+        if (publishStartAt && !startInstant) {
+          setStatusNote('게시 시작일 형식이 올바르지 않습니다.')
+          return
+        }
+        if (publishEndAt && !endInstant) {
+          setStatusNote('게시 종료일 형식이 올바르지 않습니다.')
+          return
+        }
+        if (publishMode === 'range' && (!publishStartAt || !publishEndAt)) {
+          setStatusNote('기간 지정은 시작일과 종료일이 필요합니다.')
+          return
+        }
+        if (publishMode === 'scheduled' && !publishStartAt) {
+          setStatusNote('예약 게시는 시작일이 필요합니다.')
+          return
+        }
+        if (startIsAfterEnd(startInstant, endInstant)) {
+          setStatusNote('게시 시작일이 종료일보다 늦을 수 없습니다.')
+          return
+        }
+        startIso = publishStartAt ? serializeNoticeDatetimeLocal(publishStartAt) : null
+        endIso = publishEndAt ? serializeNoticeDatetimeLocal(publishEndAt) : null
+      }
+      const submitStart = parseNoticePublishInstant(startIso)
       const plan = planNoticeClientAutoPush({
-        sendPushRequested: sendPush && !scheduled,
+        sendPushRequested: sendPush && !isFutureNoticeStart(submitStart),
         pendingPhotoCount: currentPending.length,
         pendingFileCount: pendingFiles.length,
-        publishStartAt: publishStartAt || null,
+        publishStartAt: submitStart,
       })
       const payload = {
         title,
@@ -404,8 +476,8 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         targetType,
         targetValue:
           targetType === NOTICE_TARGET_ALL ? null : targetValue || null,
-        publishStartAt: publishStartAt ? new Date(publishStartAt).toISOString() : null,
-        publishEndAt: publishEndAt ? new Date(publishEndAt).toISOString() : null,
+        publishStartAt: startIso,
+        publishEndAt: endIso,
         sendPush: plan.sendOnCreate,
       }
 
@@ -736,27 +808,19 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         />
         상단고정
       </label>
-      <label className="notice-field">
-        <span>게시 시작일 (선택)</span>
-        <input
-          type="datetime-local"
-          value={publishStartAt}
-          onChange={(e) => setPublishStartAt(e.target.value)}
-        />
-      </label>
-      <label className="notice-field">
-        <span>게시 종료일 (선택)</span>
-        <input
-          type="datetime-local"
-          value={publishEndAt}
-          onChange={(e) => setPublishEndAt(e.target.value)}
-        />
-      </label>
-      {scheduled ? (
-        <p className="notice-scheduled-push-hint" role="status">
-          {NOTICE_SCHEDULED_PUSH_HINT}
-        </p>
-      ) : (
+      <NoticePublishWindowFields
+        mode={publishMode}
+        startLocal={publishStartAt}
+        endLocal={publishEndAt}
+        status={publishStatus}
+        scheduled={scheduled}
+        onModeChange={onPublishModeChange}
+        onStartChange={setPublishStartAt}
+        onEndChange={setPublishEndAt}
+        onQuickRange={onQuickRange}
+        invalidWindow={invalidWindow}
+      />
+      {scheduled ? null : (
         <label className="notice-check notice-check-push">
           <input
             type="checkbox"
@@ -772,7 +836,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         </p>
       ) : null}
       <div className="notice-form-actions">
-        <button type="submit" disabled={busy} className="ui-btn ui-btn-primary">
+        <button type="submit" disabled={busy || invalidWindow} className="ui-btn ui-btn-primary">
           {busy
             ? saveProgress || (isEdit ? '수정 중…' : '등록 중…')
             : isEdit

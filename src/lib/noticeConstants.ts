@@ -34,7 +34,58 @@ export const NOTICE_PUSH_DONE_LABEL = "푸시 발송 완료";
 export const NOTICE_CREATE_SEND_PUSH_LABEL = "등록과 동시에 푸시 알림 보내기";
 export const NOTICE_EDIT_SEND_PUSH_LABEL = "수정 내용 푸시 알림 보내기";
 export const NOTICE_SCHEDULED_PUSH_HINT =
-  "예약 게시 공지는 현재 게시 시각 자동 푸시를 지원하지 않으며 게시 후 수동 발송할 수 있습니다.";
+  "예약 게시 공지는 현재 게시 시각 자동 푸시를 지원하지 않으며 게시 시작 이후 상세에서 수동 발송할 수 있습니다.";
+
+export const NOTICE_PUBLISH_MODES = ["always", "today", "range", "scheduled"] as const;
+export type NoticePublishMode = (typeof NOTICE_PUBLISH_MODES)[number];
+
+export const NOTICE_PUBLISH_MODE_LABELS: Record<NoticePublishMode, string> = {
+  always: "계속 게시",
+  today: "오늘만",
+  range: "기간 지정",
+  scheduled: "예약 게시",
+};
+
+export const NOTICE_PUBLISH_MODE_HINTS: Record<NoticePublishMode, string> = {
+  always: "기한을 두지 않습니다. 캐디에게 계속 보입니다.",
+  today: "한국시간 오늘 하루만 보입니다. 내일 0시부터 숨겨집니다.",
+  range: "선택한 시작일부터 종료일 하루가 끝날 때까지 보입니다.",
+  scheduled: "지정한 시작 시각부터 보입니다. 종료일은 비워도 됩니다.",
+};
+
+export const NOTICE_PUBLISH_STATUSES = ["live", "scheduled", "ended"] as const;
+export type NoticePublishStatus = (typeof NOTICE_PUBLISH_STATUSES)[number];
+
+export const NOTICE_PUBLISH_STATUS_LABELS: Record<NoticePublishStatus, string> = {
+  live: "게시 중",
+  scheduled: "예약",
+  ended: "종료",
+};
+
+export const NOTICE_PUBLISH_FILTERS = ["all", "live", "scheduled", "ended"] as const;
+export type NoticePublishFilter = (typeof NOTICE_PUBLISH_FILTERS)[number];
+
+export const NOTICE_PUBLISH_FILTER_LABELS: Record<NoticePublishFilter, string> = {
+  all: "전체",
+  live: "게시 중",
+  scheduled: "예약",
+  ended: "종료",
+};
+
+export const NOTICE_PUBLISH_QUICK_RANGES = ["today", "3d", "7d", "month"] as const;
+export type NoticePublishQuickRange = (typeof NOTICE_PUBLISH_QUICK_RANGES)[number];
+
+export const NOTICE_PUBLISH_QUICK_RANGE_LABELS: Record<NoticePublishQuickRange, string> = {
+  today: "오늘",
+  "3d": "3일",
+  "7d": "7일",
+  month: "이번 달",
+};
+
+export const NOTICE_PUBLISH_CLEAR_LABEL = "날짜 지우기";
+export const NOTICE_PUBLISH_ALWAYS_PERIOD_LABEL = "기한 없음";
+export const NOTICE_PUBLISH_END_EXCLUSIVE_HINT =
+  "종료일은 그날 하루가 끝날 때까지입니다. 다음날 0시부터 캐디에게 숨겨집니다.";
 
 export const NOTICE_PUSH_CONCURRENCY = 12;
 export const NOTICE_PUSH_AUDIT_ACTION = "NOTICE_PUSH_SEND";

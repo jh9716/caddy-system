@@ -113,3 +113,18 @@ export function parseKstDateTimeLocal(value: string): Date {
     Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]) - 9, Number(m[5]))
   );
 }
+
+export function tryParseKstDateTimeLocal(value: string): Date | null {
+  const s = String(value ?? "").trim();
+  if (!s) return null;
+  try {
+    return parseKstDateTimeLocal(s);
+  } catch {
+    return null;
+  }
+}
+
+/** 해당 KST 달력일의 00:00. */
+export function kstStartOfDay(ymd: string): Date {
+  return parseKstDateTimeLocal(`${ymd}T00:00`);
+}

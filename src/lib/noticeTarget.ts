@@ -7,6 +7,7 @@ import {
   NOTICE_TARGET_CADDY_TYPE,
   NOTICE_TARGET_TEAM,
   NOTICE_TARGET_TYPES,
+  type NoticePublishFilter,
   type NoticeTargetType,
 } from "@/lib/noticeConstants";
 import type { AppRole } from "@/lib/sessionCookies";
@@ -132,6 +133,11 @@ export function readNoticeContent(body: Record<string, unknown>): string | undef
   return undefined;
 }
 
+/**
+ * Half-open window [publishStartAt, publishEndAt).
+ * Date-only UI stores exclusive end as next KST day 00:00.
+ * null start/end means no bound, so existing notices stay live.
+ */
 export function isNoticeInPublishWindow(
   notice: NoticePublishFields,
   now: Date = new Date()
@@ -139,7 +145,7 @@ export function isNoticeInPublishWindow(
   if (notice.publishStartAt && notice.publishStartAt.getTime() > now.getTime()) {
     return false;
   }
-  if (notice.publishEndAt && notice.publishEndAt.getTime() < now.getTime()) {
+  if (notice.publishEndAt && notice.publishEndAt.getTime() <= now.getTime()) {
     return false;
   }
   return true;
@@ -196,7 +202,7 @@ export function visibleNoticeWhere(
         OR: [{ publishStartAt: null }, { publishStartAt: { lte: now } }],
       },
       {
-        OR: [{ publishEndAt: null }, { publishEndAt: { gte: now } }],
+        OR: [{ publishEndAt: null }, { publishEndAt: { gt: now } }],
       },
       { OR: targetOr },
     ],
@@ -205,6 +211,28 @@ export function visibleNoticeWhere(
 
 export function noticeListOrder(): typeof NOTICE_LIST_ORDER {
   return NOTICE_LIST_ORDER;
+}
+
+/** Admin list filter only. Caddy/leader keep visibleNoticeWhere. */
+export function adminNoticePublishWhere(
+  filter: NoticePublishFilter,
+  now: Date = new Date()
+): Prisma.NoticeWhereInput {
+  if (filter === "scheduled") {
+    return { publishStartAt: { gt: now } };
+  }
+  if (filter === "ended") {
+    return { publishEndAt: { lte: now } };
+  }
+  if (filter === "live") {
+    return {
+      AND: [
+        { OR: [{ publishStartAt: null }, { publishStartAt: { lte: now } }] },
+        { OR: [{ publishEndAt: null }, { publishEndAt: { gt: now } }] },
+      ],
+    };
+  }
+  return {};
 }
 
 const NOTICE_CADDY_TYPE_LABELS: Record<string, string> = {
