@@ -7,6 +7,7 @@ import {
   confirmNativeNoticeDownloadResult,
   nativeNoticeDownloadErrorCode,
   nativeNoticeDownloadFilename,
+  nativeNoticeDownloadErrorStage,
   nativeNoticeDownloadUserMessage,
   noticeFileDownloadMode,
   noticeFileNativeDownloadPath,
@@ -58,6 +59,8 @@ export async function downloadNoticeFileOnNative(input: {
     if (code === "unauthorized") {
       consumeUnauthorizedMemberResponse({ status: 401 });
     }
-    throw new Error(nativeNoticeDownloadUserMessage(code));
+    throw new Error(
+      nativeNoticeDownloadUserMessage(code, nativeNoticeDownloadErrorStage(error))
+    );
   }
 }

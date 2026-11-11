@@ -11,6 +11,7 @@ import android.provider.MediaStore;
 import android.webkit.CookieManager;
 import android.webkit.WebView;
 import androidx.annotation.RequiresApi;
+import com.getcapacitor.Bridge;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
@@ -19,6 +20,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import kr.verthill.caddy.BuildConfig;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -70,20 +72,59 @@ public class NoticeFileDownloadPlugin extends Plugin {
     private void startDownload(PluginCall call) {
         final String path = call.getString("path", "");
         final String filename = call.getString("filename", "");
-        String pageUrl = "";
-        try {
-            WebView webView = getBridge() != null ? getBridge().getWebView() : null;
-            if (webView != null && webView.getUrl() != null) {
-                pageUrl = webView.getUrl();
-            }
-        } catch (Exception ignored) {
-            pageUrl = "";
+        final Bridge bridge = getBridge();
+        if (bridge == null) {
+            rejectDownload(call, new NoticeFileDownloadException("invalid_url", "page_url"));
+            return;
         }
-        final String originPageUrl = pageUrl;
-        DOWNLOAD_EXECUTOR.execute(() -> runDownload(call, originPageUrl, path, filename));
+        // Capacitor plugin methods run on Bridge.taskHandler, not the UI thread.
+        // WebView.getUrl() and CookieManager.getCookie() must be read on the UI thread.
+        bridge.executeOnMainThread(
+            () -> {
+                String pageUrl = readWebViewUrlOnUiThread(bridge);
+                String cookieHeader = "";
+                try {
+                    URL url = NoticeFileDownloadPolicy.buildDownloadUrl(pageUrl, path);
+                    String cookie = CookieManager.getInstance().getCookie(url.toString());
+                    if (cookie != null && !cookie.isEmpty()) {
+                        cookieHeader = cookie;
+                    }
+                } catch (NoticeFileDownloadException e) {
+                    rejectDownload(call, e);
+                    return;
+                } catch (Exception ignored) {
+                    rejectDownload(call, new NoticeFileDownloadException("invalid_url", "page_url"));
+                    return;
+                }
+                final String originPageUrl = pageUrl;
+                final String cookies = cookieHeader;
+                DOWNLOAD_EXECUTOR.execute(
+                    () -> runDownload(call, originPageUrl, path, filename, cookies)
+                );
+            }
+        );
     }
 
-    private void runDownload(PluginCall call, String pageUrl, String path, String filename) {
+    private static String readWebViewUrlOnUiThread(Bridge bridge) {
+        try {
+            WebView webView = bridge.getWebView();
+            if (webView == null) {
+                return "";
+            }
+            String current = webView.getUrl();
+            return current != null ? current : "";
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private void runDownload(
+        PluginCall call,
+        String pageUrl,
+        String path,
+        String filename,
+        String cookieHeader
+    ) {
         HttpURLConnection conn = null;
         Uri pendingUri = null;
         File pendingFile = null;
@@ -92,7 +133,7 @@ public class NoticeFileDownloadPlugin extends Plugin {
             String displayName = NoticeFileDownloadPolicy.sanitizeDisplayName(filename);
             String mime = NoticeFileDownloadPolicy.mimeForFileName(displayName);
             URL url = NoticeFileDownloadPolicy.buildDownloadUrl(pageUrl, path);
-            conn = openAllowlistedGet(url);
+            conn = openAllowlistedGet(url, cookieHeader);
             int hops = 0;
             int status = conn.getResponseCode();
             while (isRedirect(status)) {
@@ -103,7 +144,7 @@ public class NoticeFileDownloadPlugin extends Plugin {
                 conn.disconnect();
                 conn = null;
                 url = NoticeFileDownloadPolicy.validateRedirect(url, location);
-                conn = openAllowlistedGet(url);
+                conn = openAllowlistedGet(url, cookieHeader);
                 status = conn.getResponseCode();
                 hops++;
             }
@@ -159,7 +200,7 @@ public class NoticeFileDownloadPlugin extends Plugin {
             call.resolve(ret);
         } catch (NoticeFileDownloadException e) {
             cleanupFailedSave(resolver, pendingUri, pendingFile);
-            call.reject(e.code, e.code);
+            rejectDownload(call, e);
         } catch (Exception ignored) {
             cleanupFailedSave(resolver, pendingUri, pendingFile);
             call.reject("download_failed", "download_failed");
@@ -170,16 +211,26 @@ public class NoticeFileDownloadPlugin extends Plugin {
         }
     }
 
-    private static HttpURLConnection openAllowlistedGet(URL url)
+    private static void rejectDownload(PluginCall call, NoticeFileDownloadException e) {
+        if (BuildConfig.DEBUG && e.stage != null && !e.stage.isEmpty()) {
+            JSObject data = new JSObject();
+            data.put("stage", e.stage);
+            call.reject(e.code, e.code, data);
+            return;
+        }
+        call.reject(e.code, e.code);
+    }
+
+    private static HttpURLConnection openAllowlistedGet(URL url, String cookieHeader)
         throws Exception {
         if (!"https".equalsIgnoreCase(url.getProtocol())
             || !NoticeFileDownloadPolicy.isAllowedHost(url.getHost())) {
-            throw new NoticeFileDownloadException("invalid_url");
+            throw new NoticeFileDownloadException("invalid_url", "host");
         }
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         if (!(conn instanceof HttpsURLConnection)) {
             conn.disconnect();
-            throw new NoticeFileDownloadException("invalid_url");
+            throw new NoticeFileDownloadException("invalid_url", "host");
         }
         conn.setInstanceFollowRedirects(false);
         conn.setRequestMethod("GET");
@@ -187,9 +238,8 @@ public class NoticeFileDownloadPlugin extends Plugin {
         conn.setReadTimeout(NoticeFileDownloadPolicy.READ_TIMEOUT_MS);
         conn.setUseCaches(false);
         conn.setDoInput(true);
-        String cookie = CookieManager.getInstance().getCookie(url.toString());
-        if (cookie != null && !cookie.isEmpty()) {
-            conn.setRequestProperty("Cookie", cookie);
+        if (cookieHeader != null && !cookieHeader.isEmpty()) {
+            conn.setRequestProperty("Cookie", cookieHeader);
         }
         conn.setRequestProperty("Accept", "*/*");
         conn.setRequestProperty("Referer", "https://" + url.getHost() + "/");

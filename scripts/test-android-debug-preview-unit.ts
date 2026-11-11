@@ -183,8 +183,20 @@ assert(
   assert(!nav.includes("CookieManager") && !nav.includes("password"), "nav log has no cookies or passwords");
   assert(
     !debugHosts.includes('"vercel.com"') && !debugHosts.includes("vercel.com\""),
-    "notice download FlavorHosts still excludes vercel.com"
-  );
+  "notice download FlavorHosts still excludes vercel.com"
+);
+assert(
+  read("android/app/src/main/java/kr/verthill/caddy/notice/NoticeFileDownloadPlugin.java").includes(
+    "executeOnMainThread"
+  ),
+  "debug download reads WebView URL on the UI thread"
+);
+assert(
+  read("android/app/src/main/java/kr/verthill/caddy/notice/NoticeFileDownloadPolicy.java").includes(
+    'throw new NoticeFileDownloadException("unauthorized", "sso")'
+  ),
+  "Preview SSO redirects are unauthorized, not extra download hosts"
+);
 }
 
 console.log("== debug overlay writer ==");

@@ -13,6 +13,7 @@ import {
   confirmNativeNoticeDownloadResult,
   isNoticeFileNativeDownloadPath,
   nativeNoticeDownloadErrorCode,
+  nativeNoticeDownloadErrorStage,
   nativeNoticeDownloadFilename,
   nativeNoticeDownloadUserMessage,
   noticeFileDownloadMode,
@@ -149,6 +150,39 @@ async function main() {
     !nativeNoticeDownloadUserMessage("https://evil.example/secret").includes("http"),
     "user message never echoes a URL"
   );
+  assert(
+    nativeNoticeDownloadUserMessage("invalid_url") ===
+      "이 페이지에서는 파일을 저장할 수 없습니다.",
+    "invalid_url is a page/host error"
+  );
+  assert(
+    nativeNoticeDownloadUserMessage("invalid_filename") ===
+      "저장할 수 없는 파일입니다.",
+    "invalid_filename stays a filename error"
+  );
+  assert(
+    nativeNoticeDownloadUserMessage("invalid_url") !==
+      nativeNoticeDownloadUserMessage("invalid_filename"),
+    "invalid_url and invalid_filename are distinct"
+  );
+  assert(
+    nativeNoticeDownloadUserMessage("invalid_url", "page_url") ===
+      "이 페이지에서는 파일을 저장할 수 없습니다. (page_url)",
+    "debug stage suffix is a safe token"
+  );
+  assert(
+    nativeNoticeDownloadUserMessage("invalid_url", "https://evil.example") ===
+      "이 페이지에서는 파일을 저장할 수 없습니다.",
+    "stage suffix rejects URLs"
+  );
+  assert(
+    nativeNoticeDownloadErrorStage({ data: { stage: "page_url" } }) === "page_url",
+    "plugin data.stage is readable"
+  );
+  assert(
+    nativeNoticeDownloadErrorStage({ data: { stage: "https://x" } }) === "",
+    "plugin data.stage rejects URLs"
+  );
 
   console.log("== JS wiring ==");
   assert(NOTICE_FILE_NATIVE_PLUGIN_NAME === "NoticeFileDownload", "plugin name");
@@ -158,6 +192,7 @@ async function main() {
   assert(!nativeClient.includes("accessToken"), "native client has no token");
   assert(!nativeClient.includes("vh_session"), "native client has no session cookie");
   assert(nativeClient.includes("consumeUnauthorizedMemberResponse"), "401 still redirects");
+  assert(nativeClient.includes("nativeNoticeDownloadErrorStage"), "debug stage is forwarded");
   assert(client.includes("if (input.native === true)"), "native branch");
   {
     const downloadFn = client.slice(client.indexOf("export async function downloadNoticeFile"));
@@ -206,6 +241,45 @@ async function main() {
   );
   assert(plugin.includes('@CapacitorPlugin(\n    name = "NoticeFileDownload"'), "Capacitor name");
   assert(plugin.includes("CookieManager.getInstance().getCookie"), "WebView cookies on HTTP");
+  {
+    const start = plugin.slice(
+      plugin.indexOf("private void startDownload"),
+      plugin.indexOf("private void runDownload")
+    );
+    assert(start.includes("executeOnMainThread"), "page URL is read on the UI thread");
+    assert(
+      start.includes("webView.getUrl()") &&
+        start.indexOf("executeOnMainThread") < start.indexOf("webView.getUrl()"),
+      "getUrl runs inside executeOnMainThread"
+    );
+    assert(
+      start.indexOf("executeOnMainThread") < start.indexOf("CookieManager.getInstance().getCookie"),
+      "CookieManager.getCookie runs on the UI thread"
+    );
+    assert(
+      start.lastIndexOf("getCookie") < start.lastIndexOf("DOWNLOAD_EXECUTOR"),
+      "HTTP work starts after cookies are copied"
+    );
+    assert(!start.includes("www.verthill.kr"), "empty page URL does not fall back in the plugin");
+  }
+  assert(
+    javaPolicy.includes('throw new NoticeFileDownloadException("unauthorized", "sso")') &&
+      javaPolicy.includes('"vercel.com"'),
+    "SSO redirect is unauthorized, not a download-host expansion"
+  );
+  assert(
+    javaPolicy.includes('throw new NoticeFileDownloadException("invalid_url", "page_url")'),
+    "missing page URL is invalid_url/page_url"
+  );
+  assert(
+    read(
+      "android/app/src/debug/java/kr/verthill/caddy/notice/NoticeFileDownloadFlavorHosts.java"
+    ).includes('return "";') &&
+      !read(
+        "android/app/src/debug/java/kr/verthill/caddy/notice/NoticeFileDownloadFlavorHosts.java"
+      ).includes("www.verthill.kr"),
+    "debug empty page URL does not use production"
+  );
   assert(plugin.includes("MediaStore.Downloads"), "MediaStore Downloads");
   assert(plugin.includes("IS_PENDING"), "pending until write finishes");
   assert(plugin.includes("IS_PENDING, 0"), "clears pending after write");

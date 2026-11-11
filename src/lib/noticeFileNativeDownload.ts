@@ -108,22 +108,43 @@ export function nativeNoticeDownloadErrorCode(error: unknown): string {
   return "download_failed";
 }
 
-export function nativeNoticeDownloadUserMessage(code: string): string {
+export function nativeNoticeDownloadErrorStage(error: unknown): string {
+  if (!error || typeof error !== "object") return "";
+  const data = "data" in error ? (error as { data?: unknown }).data : undefined;
+  if (!data || typeof data !== "object") return "";
+  const stage =
+    "stage" in data ? String((data as { stage?: unknown }).stage ?? "") : "";
+  return /^[a-z_]{1,32}$/.test(stage) ? stage : "";
+}
+
+export function nativeNoticeDownloadUserMessage(code: string, stage = ""): string {
+  let message = "";
   switch (nativeNoticeDownloadErrorCode({ code })) {
     case "unavailable":
-      return "앱을 업데이트하면 첨부파일을 저장할 수 있습니다.";
+      message = "앱을 업데이트하면 첨부파일을 저장할 수 있습니다.";
+      break;
     case "unauthorized":
-      return "로그인이 필요합니다.";
+      message = "로그인이 필요합니다.";
+      break;
     case "permission_denied":
-      return "파일 저장 권한이 필요합니다.";
+      message = "파일 저장 권한이 필요합니다.";
+      break;
     case "too_large":
-      return "20MB를 초과하는 파일은 저장할 수 없습니다.";
+      message = "20MB를 초과하는 파일은 저장할 수 없습니다.";
+      break;
     case "not_found":
-      return "파일을 찾을 수 없습니다.";
+      message = "파일을 찾을 수 없습니다.";
+      break;
     case "invalid_url":
+      message = "이 페이지에서는 파일을 저장할 수 없습니다.";
+      break;
     case "invalid_filename":
-      return "저장할 수 없는 파일입니다.";
+      message = "저장할 수 없는 파일입니다.";
+      break;
     default:
-      return "파일을 저장하지 못했습니다.";
+      message = "파일을 저장하지 못했습니다.";
+      break;
   }
+  const safeStage = /^[a-z_]{1,32}$/.test(stage) ? stage : "";
+  return safeStage ? `${message} (${safeStage})` : message;
 }

@@ -48,7 +48,7 @@ final class NoticeFileDownloadPolicy {
                 return DEFAULT_HOST;
             }
             if (fallback.isEmpty() || !isAllowedHost(fallback)) {
-                throw new NoticeFileDownloadException("invalid_url");
+                throw new NoticeFileDownloadException("invalid_url", "page_url");
             }
             return fallback;
         }
@@ -56,42 +56,42 @@ final class NoticeFileDownloadPolicy {
         try {
             uri = URI.create(pageUrl);
         } catch (Exception ignored) {
-            throw new NoticeFileDownloadException("invalid_url");
+            throw new NoticeFileDownloadException("invalid_url", "page_url");
         }
         if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getUserInfo() != null) {
-            throw new NoticeFileDownloadException("invalid_url");
+            throw new NoticeFileDownloadException("invalid_url", "page_url");
         }
         String host = uri.getHost();
         if (!isAllowedHost(host)) {
-            throw new NoticeFileDownloadException("invalid_url");
+            throw new NoticeFileDownloadException("invalid_url", "host");
         }
         int port = uri.getPort();
         if (port != -1 && port != 443) {
-            throw new NoticeFileDownloadException("invalid_url");
+            throw new NoticeFileDownloadException("invalid_url", "host");
         }
         return host.toLowerCase(Locale.US);
     }
 
     static String pathnameFromPluginPath(String pathAndQuery) throws NoticeFileDownloadException {
         if (pathAndQuery == null || pathAndQuery.isEmpty()) {
-            throw new NoticeFileDownloadException("invalid_url");
+            throw new NoticeFileDownloadException("invalid_url", "path");
         }
         if (pathAndQuery.contains("\\")
             || pathAndQuery.contains("..")
             || pathAndQuery.contains("#")
             || pathAndQuery.contains("://")
             || !pathAndQuery.startsWith("/api/notice/")) {
-            throw new NoticeFileDownloadException("invalid_url");
+            throw new NoticeFileDownloadException("invalid_url", "path");
         }
         int q = pathAndQuery.indexOf('?');
         String pathname = q >= 0 ? pathAndQuery.substring(0, q) : pathAndQuery;
         String query = q >= 0 ? pathAndQuery.substring(q + 1) : "";
         if (!query.isEmpty() && !"download=1".equals(query)) {
-            throw new NoticeFileDownloadException("invalid_url");
+            throw new NoticeFileDownloadException("invalid_url", "path");
         }
         Matcher matcher = PATHNAME.matcher(pathname);
         if (!matcher.matches()) {
-            throw new NoticeFileDownloadException("invalid_url");
+            throw new NoticeFileDownloadException("invalid_url", "path");
         }
         return pathname;
     }
@@ -121,16 +121,19 @@ final class NoticeFileDownloadPolicy {
         if (!"https".equalsIgnoreCase(next.getProtocol()) || next.getUserInfo() != null) {
             throw new NoticeFileDownloadException("invalid_url");
         }
-        if (!isAllowedHost(next.getHost())) {
-            throw new NoticeFileDownloadException("invalid_url");
+        String host = next.getHost() == null ? "" : next.getHost().toLowerCase(Locale.US);
+        String path = next.getPath() == null ? "" : next.getPath();
+        if ("vercel.com".equals(host)
+            || path.startsWith("/sso-api")
+            || path.startsWith("/login")) {
+            throw new NoticeFileDownloadException("unauthorized", "sso");
+        }
+        if (!isAllowedHost(host)) {
+            throw new NoticeFileDownloadException("invalid_url", "host");
         }
         int port = next.getPort();
         if (port != -1 && port != 443) {
-            throw new NoticeFileDownloadException("invalid_url");
-        }
-        String path = next.getPath() == null ? "" : next.getPath();
-        if (path.startsWith("/login")) {
-            throw new NoticeFileDownloadException("unauthorized");
+            throw new NoticeFileDownloadException("invalid_url", "host");
         }
         if (!PATHNAME.matcher(path).matches()) {
             throw new NoticeFileDownloadException("download_failed");
@@ -148,7 +151,7 @@ final class NoticeFileDownloadPolicy {
 
     static String sanitizeDisplayName(String raw) throws NoticeFileDownloadException {
         if (raw == null) {
-            throw new NoticeFileDownloadException("invalid_filename");
+            throw new NoticeFileDownloadException("invalid_filename", "filename");
         }
         String base = raw.replace('\\', '/');
         int slash = base.lastIndexOf('/');
@@ -173,7 +176,7 @@ final class NoticeFileDownloadPolicy {
             ext = extFromName(stripped);
         }
         if (ext == null) {
-            throw new NoticeFileDownloadException("invalid_filename");
+            throw new NoticeFileDownloadException("invalid_filename", "filename");
         }
         return cleaned + "." + ext;
     }
@@ -181,7 +184,7 @@ final class NoticeFileDownloadPolicy {
     static String mimeForFileName(String filename) throws NoticeFileDownloadException {
         String ext = extFromName(filename);
         if (ext == null) {
-            throw new NoticeFileDownloadException("invalid_filename");
+            throw new NoticeFileDownloadException("invalid_filename", "filename");
         }
         switch (ext) {
             case "pdf":
