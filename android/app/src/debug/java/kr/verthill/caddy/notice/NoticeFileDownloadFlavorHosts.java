@@ -7,7 +7,7 @@ import java.util.regex.Pattern;
  * Debug-only extra hosts for notice-file download. Release has a no-op twin.
  * Keep in sync with src/lib/androidDebugPreviewHost.ts.
  */
-final class NoticeFileDownloadFlavorHosts {
+public final class NoticeFileDownloadFlavorHosts {
     private static final Pattern PREVIEW_GIT =
         Pattern.compile(
             "^caddy-system-gt8t-git-[a-z0-9-]{1,80}-jh9716s-projects\\.vercel\\.app$"
