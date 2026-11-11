@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { NoticeFilePublic } from "@/lib/noticeFileConstants";
+import { canInlineNoticeFile, type NoticeFilePublic } from "@/lib/noticeFileConstants";
 import { downloadNoticeFile, formatNoticeFileSize, openNoticeFile } from "@/lib/noticeFileClient";
 import { readCapacitorNativePlatform } from "@/lib/nativePlatformClient";
 
@@ -26,6 +26,7 @@ export default function NoticeFileList({
           noticeId,
           fileId: file.id,
           originalName: file.originalName,
+          mimeType: file.mimeType,
         });
         return;
       }
@@ -33,6 +34,7 @@ export default function NoticeFileList({
         noticeId,
         fileId: file.id,
         originalName: file.originalName,
+        mimeType: file.mimeType,
         native: readCapacitorNativePlatform(),
       });
     } catch (e) {
@@ -51,16 +53,20 @@ export default function NoticeFileList({
               <span className="notice-files-size">{formatNoticeFileSize(file.size)}</span>
             </div>
             <div className="notice-files-actions">
+              {canInlineNoticeFile(file.mimeType) ? (
+                <button
+                  type="button"
+                  className="ui-btn ui-btn-primary"
+                  onClick={() => void run("open", file)}
+                >
+                  열기
+                </button>
+              ) : null}
               <button
                 type="button"
-                className="ui-btn ui-btn-primary"
-                onClick={() => void run("open", file)}
-              >
-                열기
-              </button>
-              <button
-                type="button"
-                className="ui-btn ui-btn-ghost"
+                className={
+                  canInlineNoticeFile(file.mimeType) ? "ui-btn ui-btn-ghost" : "ui-btn ui-btn-primary"
+                }
                 onClick={() => void run("download", file)}
               >
                 다운로드

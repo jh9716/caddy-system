@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { CourseReportPhotoStorageError } from "@/lib/courseReportPhotoStorage";
-import {
-  isNoticeAuthResponse,
-  requireNoticeAdmin,
-} from "@/lib/noticeAccess";
+import { isNoticeAuthResponse, requireNoticeAdmin } from "@/lib/noticeAccess";
 import { parseRequestedSortOrder } from "@/lib/noticeMediaLock";
 import { uploadNoticeFile, NoticeFileValidationError } from "@/lib/noticeFile";
 
@@ -26,7 +23,7 @@ async function readUpload(
     const form = await req.formData().catch(() => null);
     const file = form?.get("file");
     if (!(file instanceof Blob)) {
-      throw new NoticeFileValidationError("empty_file", "PDF 파일이 필요합니다.");
+      throw new NoticeFileValidationError("empty_file", "첨부파일이 필요합니다.");
     }
     const originalName =
       file instanceof File && typeof file.name === "string" ? file.name : "attachment.pdf";
@@ -38,7 +35,7 @@ async function readUpload(
   }
   const buf = await req.arrayBuffer().catch(() => null);
   if (!buf || buf.byteLength === 0) {
-    throw new NoticeFileValidationError("empty_file", "PDF 파일이 필요합니다.");
+    throw new NoticeFileValidationError("empty_file", "첨부파일이 필요합니다.");
   }
   return { bytes: new Uint8Array(buf), originalName: "attachment.pdf", requestedSortOrder: null };
 }

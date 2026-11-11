@@ -14,7 +14,10 @@ import {
   noticeFileContentDisposition,
   openNoticeFileBody,
 } from "@/lib/noticeFile";
-import { NOTICE_FILE_MIME } from "@/lib/noticeFileConstants";
+import {
+  canInlineNoticeFile,
+  noticeFileExtFromMime,
+} from "@/lib/noticeFileConstants";
 import {
   formatPhotoServerTiming,
   photoObjectToResponseBody,
@@ -74,9 +77,11 @@ export async function GET(
     const etag = buildPrivatePhotoETag("nf", file);
     const timing = formatPhotoServerTiming({ auth: authMs, db: dbMs });
     const download = req.nextUrl.searchParams.get("download") === "1";
+    const inline = !download && canInlineNoticeFile(file.mimeType);
     const disposition = noticeFileContentDisposition(
       file.originalName,
-      download ? "attachment" : "inline"
+      inline ? "inline" : "attachment",
+      noticeFileExtFromMime(file.mimeType)
     );
     if (ifNoneMatchContains(req.headers.get("if-none-match"), etag)) {
       return new NextResponse(null, {
@@ -94,7 +99,7 @@ export async function GET(
     return new NextResponse(photoObjectToResponseBody(body), {
       status: 200,
       headers: {
-        ...privatePhotoStreamHeaders(etag, NOTICE_FILE_MIME, body, {
+        ...privatePhotoStreamHeaders(etag, file.mimeType, body, {
           "Server-Timing": formatPhotoServerTiming({
             auth: authMs,
             db: dbMs,
