@@ -175,6 +175,90 @@ jobs:
           print("debug APK Preview overlay: PASS")
           PY
 
+      - name: Verify Debug and Release applicationIds
+        run: |
+          set -euo pipefail
+          (
+            cd android
+            ./gradlew --no-daemon --console=plain processReleaseManifest
+          )
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          ANDROID_NS = "http://schemas.android.com/apk/res/android"
+          apk = Path("android/app/build/outputs/apk/debug/app-debug.apk")
+          build_tools_root = Path(os.environ["ANDROID_HOME"]) / "build-tools"
+          aapt = build_tools_root / "35.0.0" / "aapt"
+          if not aapt.is_file():
+              found = sorted(build_tools_root.glob("*/aapt"))
+              if not found:
+                  raise SystemExit("aapt not found")
+              aapt = found[-1]
+          badging = subprocess.check_output(
+              [str(aapt), "dump", "badging", str(apk)],
+              text=True,
+              errors="replace",
+          )
+          pkg = re.search(r"package: name='([^']+)'", badging)
+          label = re.search(r"application-label:'([^']*)'", badging)
+          if not pkg:
+              raise SystemExit("debug APK package name missing from aapt")
+          if pkg.group(1) != "kr.verthill.caddy.debug":
+              raise SystemExit("debug APK applicationId is " + pkg.group(1))
+          if not label or label.group(1) != "VERTHILL 테스트":
+              raise SystemExit("debug APK label is " + (label.group(1) if label else "missing"))
+
+          def pick_manifest(kind: str) -> Path:
+              blocked = {"androidtest", "android_test", "unittests", "unit_test", "exploded-aar"}
+              matches = []
+              for path in Path("android/app/build/intermediates").rglob("AndroidManifest.xml"):
+                  parts = [p.lower() for p in path.parts]
+                  if kind not in parts or any(b in parts for b in blocked):
+                      continue
+                  if kind == "debug" and "release" in parts:
+                      continue
+                  if kind == "release" and "debug" in parts:
+                      continue
+                  text = str(path)
+                  if "merged_manifest" in text or "packaged_manifest" in text:
+                      matches.append(path)
+              if not matches:
+                  raise SystemExit(kind + " merged manifest not found")
+              return sorted(matches, key=lambda p: len(p.parts))[0]
+
+          def identity(path: Path) -> tuple[str, str]:
+              root = ET.fromstring(path.read_text(encoding="utf-8"))
+              package = root.get("package") or root.get("{%s}package" % ANDROID_NS) or ""
+              authorities = []
+              for node in root.iter():
+                  auth = node.get("{%s}authorities" % ANDROID_NS) or node.get("authorities")
+                  if auth:
+                      authorities.append(auth)
+              provider = next((a for a in authorities if a.endswith(".fileprovider")), "")
+              return package, provider
+
+          debug_pkg, debug_fp = identity(pick_manifest("debug"))
+          release_pkg, release_fp = identity(pick_manifest("release"))
+          if debug_pkg != "kr.verthill.caddy.debug":
+              raise SystemExit("debug merged package is " + debug_pkg)
+          if release_pkg != "kr.verthill.caddy":
+              raise SystemExit("release merged package is " + release_pkg)
+          if debug_fp != "kr.verthill.caddy.debug.fileprovider":
+              raise SystemExit("debug FileProvider is " + debug_fp)
+          if release_fp != "kr.verthill.caddy.fileprovider":
+              raise SystemExit("release FileProvider is " + release_fp)
+          gradle = Path("android/app/build.gradle").read_text()
+          if 'applicationId "kr.verthill.caddy"' not in gradle:
+              raise SystemExit("defaultConfig applicationId changed")
+          if 'applicationIdSuffix ".debug"' not in gradle:
+              raise SystemExit("debug applicationIdSuffix missing")
+          print("applicationId debug=kr.verthill.caddy.debug release=kr.verthill.caddy")
+          PY
+
       - name: Upload app-debug.apk
         uses: actions/upload-artifact@v4
         with:

@@ -202,6 +202,10 @@ assert(
   "Gradle applicationId matches appId"
 );
 assert(
+  appGradle.includes('applicationIdSuffix ".debug"'),
+  "debug applicationIdSuffix is .debug"
+);
+assert(
   mainActivity.includes("extends BridgeActivity"),
   "MainActivity is stock BridgeActivity"
 );

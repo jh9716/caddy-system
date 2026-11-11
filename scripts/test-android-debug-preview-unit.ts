@@ -106,6 +106,41 @@ assert(
   appGradle.includes("versionCode 14") && appGradle.includes('versionName "1.0.9"'),
   "versionCode 14 / 1.0.9 frozen"
 );
+{
+  const buildTypes = appGradle.slice(appGradle.indexOf("    buildTypes {"));
+  const debugType = buildTypes.slice(
+    buildTypes.indexOf("debug {"),
+    buildTypes.indexOf("release {")
+  );
+  const releaseType = buildTypes.slice(buildTypes.indexOf("release {"));
+  assert(debugType.includes('applicationIdSuffix ".debug"'), "debug suffix .debug");
+  assert(!releaseType.includes("applicationIdSuffix"), "release has no applicationIdSuffix");
+  assert(
+    appGradle.includes('applicationId "kr.verthill.caddy"'),
+    "defaultConfig applicationId stays kr.verthill.caddy"
+  );
+}
+const debugStrings = read("android/app/src/debug/res/values/strings.xml");
+const mainStrings = read("android/app/src/main/res/values/strings.xml");
+assert(debugStrings.includes(">VERTHILL 테스트<"), "debug launcher label");
+assert(mainStrings.includes(">VERTHILL<") && !mainStrings.includes("테스트"), "release label unchanged");
+assert(debugStrings.includes("kr.verthill.caddy.debug"), "debug package_name/custom scheme");
+assert(
+  mainStrings.includes(">kr.verthill.caddy<") && !mainStrings.includes(".debug"),
+  "release package_name unchanged"
+);
+assert(
+  read("android/app/src/main/AndroidManifest.xml").includes(
+    'android:authorities="${applicationId}.fileprovider"'
+  ),
+  "FileProvider authority follows applicationId"
+);
+assert(
+  read("android/app/src/main/java/kr/verthill/caddy/HeicNativeJpegConverter.java").includes(
+    'context.getPackageName() + ".fileprovider"'
+  ),
+  "HEIC FileProvider uses runtime package name"
+);
 
 console.log("== debug overlay writer ==");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vh-debug-cap-"));
@@ -144,6 +179,12 @@ assert(workflow.includes("name: Android Debug APK"), "debug workflow name");
 assert(workflow.includes("pull_request:") && workflow.includes("workflow_dispatch:"), "PR + dispatch");
 assert(!workflow.includes("bundleRelease") && !workflow.includes("assembleRelease"), "no release bundle");
 assert(workflow.includes("assembleDebug"), "assembleDebug");
+assert(workflow.includes("kr.verthill.caddy.debug"), "CI checks debug applicationId");
+assert(workflow.includes('pkg.group(1) != "kr.verthill.caddy.debug"'), "CI fails if debug id wrong");
+assert(
+  workflow.includes('release_pkg != "kr.verthill.caddy"'),
+  "CI checks release applicationId has no .debug"
+);
 assert(workflow.includes("compileReleaseJavaWithJavac"), "release Java compile guard");
 assert(workflow.includes("native:android-debug-preview-config"), "writes debug overlay");
 assert(workflow.includes("ephemeral debug.keystore"), "throwaway debug cert");

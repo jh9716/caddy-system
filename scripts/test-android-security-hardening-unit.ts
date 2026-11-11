@@ -252,6 +252,11 @@ async function main() {
   assert(appGradle.includes("versionCode 14"), "versionCode 14");
   assert(appGradle.includes('versionName "1.0.9"'), "versionName 1.0.9");
   assert(
+    appGradle.includes('applicationId "kr.verthill.caddy"') &&
+      appGradle.includes('applicationIdSuffix ".debug"'),
+    "release applicationId unchanged; debug uses .debug suffix"
+  );
+  assert(
     !cfg.includes("certificatePinner") && !cfg.includes("certificate pinning"),
     "no certificate pinning in this PR"
   );
