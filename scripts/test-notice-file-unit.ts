@@ -1336,6 +1336,12 @@ async function main() {
       assert(client.includes("downloadNoticeFile"), "android download helper");
       assert(client.includes("openNoticeFile"), "android open helper");
       assert(client.includes("readCapacitorNativePlatform") || client.includes("native"), "native open fallback");
+      assert(client.includes("if (input.native === true)"), "native download branch");
+      assert(client.includes("triggerBlobDownload"), "browser/PWA blob download kept");
+      assert(
+        read("src/components/notice/NoticeFileList.tsx").includes("outcome.confirmed === true"),
+        "native success UI requires confirmed save"
+      );
       assert(client.includes("canInlineNoticeFile"), "non-pdf skips inline open");
       assert(!photoRoute.includes("application/pdf"), "photo API not widened to pdf");
       assert(!read("src/lib/noticePhoto.ts").includes("application/pdf"), "photo helper not pdf");

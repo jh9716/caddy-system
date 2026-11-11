@@ -212,9 +212,50 @@ async function main() {
     "photo inputs do not use capture= (Capacitor camera FileProvider unused)"
   );
 
+  console.log("== notice file native download ==");
+  const noticePlugin = read(
+    "android/app/src/main/java/kr/verthill/caddy/notice/NoticeFileDownloadPlugin.java"
+  );
+  const debugHosts = read(
+    "android/app/src/debug/java/kr/verthill/caddy/notice/NoticeFileDownloadFlavorHosts.java"
+  );
+  const releaseHosts = read(
+    "android/app/src/release/java/kr/verthill/caddy/notice/NoticeFileDownloadFlavorHosts.java"
+  );
+  assert(
+    debugHosts.includes("vercel.app") && !releaseHosts.includes("vercel.app"),
+    "Preview hosts exist only in the debug FlavorHosts class"
+  );
+  assert(
+    !cfg.includes("vercel.app") && cfg.includes('url: "https://www.verthill.kr"'),
+    "Release Capacitor server.url stays www.verthill.kr"
+  );
+  assert(
+    noticePlugin.includes("CookieManager.getInstance().getCookie") &&
+      !noticePlugin.includes("getString(\"url\"") &&
+      !noticePlugin.includes("Base64"),
+    "notice download uses WebView cookies and a path, not a URL/Base64 bridge"
+  );
+  assert(
+    manifest.includes("WRITE_EXTERNAL_STORAGE") &&
+      manifest.includes('android:maxSdkVersion="28"') &&
+      !manifest.includes("MANAGE_EXTERNAL_STORAGE"),
+    "legacy Downloads write is maxSdk 28 only"
+  );
+  assert(
+    filePaths.includes('<cache-path name="heic_jpeg" path="heic-jpeg/" />') &&
+      !filePaths.includes("Download"),
+    "FileProvider is not widened for Downloads"
+  );
+
   console.log("== Android version frozen ==");
-  assert(appGradle.includes("versionCode 14"), "versionCode 14");
-  assert(appGradle.includes('versionName "1.0.9"'), "versionName 1.0.9");
+  assert(appGradle.includes("versionCode 15"), "versionCode 15");
+  assert(appGradle.includes('versionName "1.0.10"'), "versionName 1.0.10");
+  assert(
+    appGradle.includes('applicationId "kr.verthill.caddy"') &&
+      appGradle.includes('applicationIdSuffix ".debug"'),
+    "release applicationId unchanged; debug uses .debug suffix"
+  );
   assert(
     !cfg.includes("certificatePinner") && !cfg.includes("certificate pinning"),
     "no certificate pinning in this PR"

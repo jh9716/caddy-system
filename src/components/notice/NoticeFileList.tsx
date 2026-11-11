@@ -13,21 +13,36 @@ export default function NoticeFileList({
   files: NoticeFilePublic[];
 }) {
   const [note, setNote] = useState("");
+  const [noteOk, setNoteOk] = useState(false);
+  const [busyFileId, setBusyFileId] = useState<number | null>(null);
   if (files.length === 0) return null;
 
   async function run(
     action: "open" | "download",
     file: NoticeFilePublic
   ) {
+    if (busyFileId != null) return;
     setNote("");
+    setNoteOk(false);
+    setBusyFileId(file.id);
+    const native = readCapacitorNativePlatform();
     try {
       if (action === "download") {
-        await downloadNoticeFile({
+        const outcome = await downloadNoticeFile({
           noticeId,
           fileId: file.id,
           originalName: file.originalName,
           mimeType: file.mimeType,
+          native,
         });
+        if (outcome.confirmed === true) {
+          setNoteOk(true);
+          setNote(
+            outcome.displayName
+              ? `다운로드 폴더에 저장했습니다. (${outcome.displayName})`
+              : "다운로드 폴더에 저장했습니다."
+          );
+        }
         return;
       }
       await openNoticeFile({
@@ -35,10 +50,13 @@ export default function NoticeFileList({
         fileId: file.id,
         originalName: file.originalName,
         mimeType: file.mimeType,
-        native: readCapacitorNativePlatform(),
+        native,
       });
     } catch (e) {
+      setNoteOk(false);
       setNote(e instanceof Error ? e.message : "파일을 열 수 없습니다.");
+    } finally {
+      setBusyFileId(null);
     }
   }
 
@@ -57,6 +75,7 @@ export default function NoticeFileList({
                 <button
                   type="button"
                   className="ui-btn ui-btn-primary"
+                  disabled={busyFileId != null}
                   onClick={() => void run("open", file)}
                 >
                   열기
@@ -67,15 +86,24 @@ export default function NoticeFileList({
                 className={
                   canInlineNoticeFile(file.mimeType) ? "ui-btn ui-btn-ghost" : "ui-btn ui-btn-primary"
                 }
+                disabled={busyFileId != null}
                 onClick={() => void run("download", file)}
               >
-                다운로드
+                {busyFileId === file.id ? "저장 중..." : "다운로드"}
               </button>
             </div>
           </li>
         ))}
       </ul>
-      {note ? <p className="notice-files-note">{note}</p> : null}
+      {note ? (
+        <p
+          className={noteOk ? "notice-files-note is-ok" : "notice-files-note"}
+          role="status"
+          aria-live="polite"
+        >
+          {note}
+        </p>
+      ) : null}
     </section>
   );
 }

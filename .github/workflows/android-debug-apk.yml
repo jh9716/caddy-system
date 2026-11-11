@@ -1,0 +1,282 @@
+# Isolated Debug APK for PR #372 Preview phone tests.
+# Do not add Play submit, release signing, or production secrets.
+# MERGE HOLD: this does not deploy Production or change the store APK.
+name: Android Debug APK
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      debug_server_url:
+        description: HTTPS Preview origin for debug WebView (VERTHILL Preview git alias only)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: android-debug-apk-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assemble-debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      VERTHILL_DEBUG_SERVER_URL: ${{ github.event.inputs.debug_server_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Refuse production secrets
+        run: |
+          set -eu
+          for name in \
+            ANDROID_UPLOAD_KEYSTORE_B64 \
+            GOOGLE_SERVICES_JSON_B64 \
+            ANDROID_KEYSTORE_PATH \
+            ANDROID_KEYSTORE_PASSWORD \
+            ANDROID_KEY_ALIAS \
+            ANDROID_KEY_PASSWORD \
+            KAKAO_NATIVE_APP_KEY
+          do
+            eval "value=\${$name-}"
+            if [ -n "${value}" ]; then
+              echo "refusing debug APK job because $name is set"
+              exit 1
+            fi
+          done
+          echo "no production signing or Kakao secrets in debug job"
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Node from package.json engines
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;35.0.0"
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Capacitor sync Android
+        run: npx cap sync android
+
+      - name: Write Debug Preview Capacitor overlay
+        run: |
+          set -euo pipefail
+          url="${VERTHILL_DEBUG_SERVER_URL:-}"
+          if [ -z "$url" ]; then
+            url="https://caddy-system-gt8t-git-cursor-android-no-4bcddd-jh9716s-projects.vercel.app"
+          fi
+          npm run native:android-debug-preview-config -- --url "$url"
+
+      - name: Create ephemeral debug keystore
+        run: |
+          set -euo pipefail
+          if [ -f android/app/debug.keystore ]; then
+            echo "debug.keystore already present"
+          else
+            keytool -genkeypair -noprompt \
+              -alias androiddebugkey \
+              -dname "CN=Android Debug,O=VERTHILL,C=KR" \
+              -keystore android/app/debug.keystore \
+              -storepass android \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000
+            echo "ephemeral debug.keystore created"
+          fi
+
+      - name: Compile Debug and Release Java
+        run: |
+          set -euo pipefail
+          if [ -n "${ANDROID_HOME:-}" ] && [ ! -f android/local.properties ]; then
+            printf 'sdk.dir=%s\n' "$ANDROID_HOME" > android/local.properties
+          fi
+          (
+            cd android
+            ./gradlew --no-daemon --console=plain \
+              compileDebugJavaWithJavac \
+              compileReleaseJavaWithJavac
+          )
+
+      - name: Verify Preview host is Debug-only
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          debug = list(Path("android/app/build").rglob("NoticeFileDownloadFlavorHosts.class"))
+          if not debug:
+              raise SystemExit("FlavorHosts class files missing")
+          release_hits = []
+          debug_hits = []
+          for path in debug:
+              text = path.read_bytes()
+              has_preview = b"vercel.app" in text
+              parts = {p.lower() for p in path.parts}
+              if "release" in parts and "debug" not in parts:
+                  if has_preview:
+                      release_hits.append(str(path))
+              if "debug" in parts:
+                  if has_preview:
+                      debug_hits.append(str(path))
+          if release_hits:
+              raise SystemExit("release FlavorHosts contains Preview host")
+          if not debug_hits:
+              raise SystemExit("debug FlavorHosts missing Preview host")
+          print("Preview host confined to debug FlavorHosts")
+          PY
+
+      - name: Assemble Debug APK
+        run: |
+          set -euo pipefail
+          (
+            cd android
+            ./gradlew --no-daemon --console=plain assembleDebug
+          )
+          test -s android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Verify Debug APK overlay
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+          apk = Path("android/app/build/outputs/apk/debug/app-debug.apk")
+          if not apk.is_file() or apk.stat().st_size <= 0:
+              raise SystemExit("app-debug.apk missing")
+          with zipfile.ZipFile(apk) as z:
+              cfg = z.read("assets/capacitor.config.json").decode("utf-8")
+          if "caddy-system-gt8t-git-cursor-android-no-4bcddd-jh9716s-projects.vercel.app" not in cfg:
+              raise SystemExit("debug APK is not pointed at the PR Preview host")
+          if "www.verthill.kr" not in cfg:
+              raise SystemExit("debug APK lost production allowNavigation entries")
+          if "kauth.kakao.com" in cfg:
+              raise SystemExit("debug APK must not add Kakao WebView hosts")
+          if '"vercel.com"' not in cfg:
+              raise SystemExit("debug APK must keep Vercel SSO on vercel.com in WebView")
+          if "github.com" in cfg or "accounts.google.com" in cfg:
+              raise SystemExit("debug APK must not add GitHub/Google WebView hosts")
+          gradle = Path("android/app/build.gradle").read_text()
+          if "versionCode 15" not in gradle or 'versionName "1.0.10"' not in gradle:
+              raise SystemExit("versionCode/versionName changed")
+          print("debug APK Preview overlay: PASS")
+          PY
+
+      - name: Verify Debug and Release applicationIds
+        run: |
+          set -euo pipefail
+          (
+            cd android
+            ./gradlew --no-daemon --console=plain processReleaseManifest
+          )
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          ANDROID_NS = "http://schemas.android.com/apk/res/android"
+          apk = Path("android/app/build/outputs/apk/debug/app-debug.apk")
+          build_tools_root = Path(os.environ["ANDROID_HOME"]) / "build-tools"
+          aapt = build_tools_root / "35.0.0" / "aapt"
+          if not aapt.is_file():
+              found = sorted(build_tools_root.glob("*/aapt"))
+              if not found:
+                  raise SystemExit("aapt not found")
+              aapt = found[-1]
+          badging = subprocess.check_output(
+              [str(aapt), "dump", "badging", str(apk)],
+              text=True,
+              errors="replace",
+          )
+          pkg = re.search(r"package: name='([^']+)'", badging)
+          label = re.search(r"application-label:'([^']*)'", badging)
+          if not pkg:
+              raise SystemExit("debug APK package name missing from aapt")
+          if pkg.group(1) != "kr.verthill.caddy.debug":
+              raise SystemExit("debug APK applicationId is " + pkg.group(1))
+          if not label or label.group(1) != "VERTHILL 테스트":
+              raise SystemExit("debug APK label is " + (label.group(1) if label else "missing"))
+
+          def pick_manifest(kind: str) -> Path:
+              blocked = {"androidtest", "android_test", "unittests", "unit_test", "exploded-aar"}
+              matches = []
+              for path in Path("android/app/build/intermediates").rglob("AndroidManifest.xml"):
+                  parts = [p.lower() for p in path.parts]
+                  if kind not in parts or any(b in parts for b in blocked):
+                      continue
+                  if kind == "debug" and "release" in parts:
+                      continue
+                  if kind == "release" and "debug" in parts:
+                      continue
+                  text = str(path)
+                  if "merged_manifest" in text or "packaged_manifest" in text:
+                      matches.append(path)
+              if not matches:
+                  raise SystemExit(kind + " merged manifest not found")
+              return sorted(matches, key=lambda p: len(p.parts))[0]
+
+          def identity(path: Path) -> tuple[str, str]:
+              root = ET.fromstring(path.read_text(encoding="utf-8"))
+              package = root.get("package") or root.get("{%s}package" % ANDROID_NS) or ""
+              authorities = []
+              for node in root.iter():
+                  auth = node.get("{%s}authorities" % ANDROID_NS) or node.get("authorities")
+                  if auth:
+                      authorities.append(auth)
+              provider = next((a for a in authorities if a.endswith(".fileprovider")), "")
+              return package, provider
+
+          debug_pkg, debug_fp = identity(pick_manifest("debug"))
+          release_pkg, release_fp = identity(pick_manifest("release"))
+          if debug_pkg != "kr.verthill.caddy.debug":
+              raise SystemExit("debug merged package is " + debug_pkg)
+          if release_pkg != "kr.verthill.caddy":
+              raise SystemExit("release merged package is " + release_pkg)
+          if debug_fp != "kr.verthill.caddy.debug.fileprovider":
+              raise SystemExit("debug FileProvider is " + debug_fp)
+          if release_fp != "kr.verthill.caddy.fileprovider":
+              raise SystemExit("release FileProvider is " + release_fp)
+          gradle = Path("android/app/build.gradle").read_text()
+          if 'applicationId "kr.verthill.caddy"' not in gradle:
+              raise SystemExit("defaultConfig applicationId changed")
+          if 'applicationIdSuffix ".debug"' not in gradle:
+              raise SystemExit("debug applicationIdSuffix missing")
+          print("applicationId debug=kr.verthill.caddy.debug release=kr.verthill.caddy")
+          PY
+
+      - name: Upload app-debug.apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Cleanup runner debug inputs
+        if: always()
+        run: |
+          set +x
+          rm -f android/app/debug.keystore
+          rm -f android/app/src/debug/assets/capacitor.config.json
+          rm -f android/local.properties
+          echo "Runner debug inputs deleted"

@@ -280,12 +280,25 @@ function triggerBlobDownload(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+export type NoticeFileDownloadOutcome = {
+  confirmed: boolean;
+  displayName?: string;
+};
+
 export async function downloadNoticeFile(input: {
   noticeId: number;
   fileId: number;
   originalName: string;
   mimeType?: string;
-}): Promise<void> {
+  native?: boolean;
+}): Promise<NoticeFileDownloadOutcome> {
+  if (input.native === true) {
+    const { downloadNoticeFileOnNative } = await import(
+      "@/lib/noticeFileNativeDownloadClient"
+    );
+    const saved = await downloadNoticeFileOnNative(input);
+    return { confirmed: true, displayName: saved.displayName };
+  }
   const { blob, filename } = await blobFromNoticeFile(
     input.noticeId,
     input.fileId,
@@ -294,6 +307,7 @@ export async function downloadNoticeFile(input: {
     input.mimeType
   );
   triggerBlobDownload(blob, filename);
+  return { confirmed: false, displayName: filename };
 }
 
 export async function openNoticeFile(input: {
@@ -305,7 +319,7 @@ export async function openNoticeFile(input: {
 }): Promise<void> {
   const inline = canInlineNoticeFile(input.mimeType);
   if (!inline) {
-    await downloadNoticeFile(input);
+    await downloadNoticeFile({ ...input, native: input.native });
     return;
   }
   const inlineUrl = noticeFileSrc(input.noticeId, input.fileId);

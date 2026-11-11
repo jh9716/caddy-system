@@ -210,8 +210,8 @@ assert(
 
 console.log("== version + SDK policy ==");
 assert(
-  appGradle.includes("versionCode 14") && appGradle.includes('versionName "1.0.9"'),
-  "Play candidate versionCode 14 / versionName 1.0.9"
+  appGradle.includes("versionCode 15") && appGradle.includes('versionName "1.0.10"'),
+  "Play candidate versionCode 15 / versionName 1.0.10"
 );
 assert(
   variables.includes("compileSdkVersion = 36") &&
@@ -357,8 +357,8 @@ assert(
       "--aab android/app/build/outputs/bundle/release/app-release.aab"
     ) &&
     workflow.includes("--expected-package kr.verthill.caddy") &&
-    workflow.includes("--expected-version-code 14") &&
-    workflow.includes("--expected-version-name 1.0.9") &&
+    workflow.includes("--expected-version-code 15") &&
+    workflow.includes("--expected-version-name 1.0.10") &&
     workflow.includes("Gradle applicationId sanity mismatch") &&
     workflow.includes("strings.xml package_name sanity mismatch"),
   "package/version PASS requires AGP/AAB release manifest, with source only as sanity"

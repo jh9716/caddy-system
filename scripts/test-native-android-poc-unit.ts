@@ -202,6 +202,10 @@ assert(
   "Gradle applicationId matches appId"
 );
 assert(
+  appGradle.includes('applicationIdSuffix ".debug"'),
+  "debug applicationIdSuffix is .debug"
+);
+assert(
   mainActivity.includes("extends BridgeActivity"),
   "MainActivity is stock BridgeActivity"
 );
@@ -210,9 +214,18 @@ assert(
   "KakaoNativeAuth plugin registered"
 );
 assert(
+  mainActivity.includes("registerPlugin(NoticeFileDownloadPlugin.class)"),
+  "NoticeFileDownload plugin registered"
+);
+assert(
   mainActivity.indexOf("registerPlugin(KakaoNativeAuthPlugin.class)") <
     mainActivity.indexOf("super.onCreate(savedInstanceState)"),
   "KakaoNativeAuth still registers before BridgeActivity onCreate"
+);
+assert(
+  mainActivity.indexOf("registerPlugin(NoticeFileDownloadPlugin.class)") <
+    mainActivity.indexOf("super.onCreate(savedInstanceState)"),
+  "NoticeFileDownload still registers before BridgeActivity onCreate"
 );
 assert(
   mainActivity.includes("new VerthillBridgeWebChromeClient(bridge)"),
@@ -288,6 +301,15 @@ assert(!manifest.includes("READ_MEDIA_IMAGES"), "no READ_MEDIA_IMAGES permission
 assert(
   !manifest.includes("READ_EXTERNAL_STORAGE"),
   "no READ_EXTERNAL_STORAGE permission"
+);
+assert(
+  !manifest.includes("MANAGE_EXTERNAL_STORAGE"),
+  "no MANAGE_EXTERNAL_STORAGE permission"
+);
+assert(
+  manifest.includes("WRITE_EXTERNAL_STORAGE") &&
+    manifest.includes('android:maxSdkVersion="28"'),
+  "legacy WRITE_EXTERNAL_STORAGE is maxSdk 28"
 );
 assert(
   manifest.includes("POST_NOTIFICATIONS"),
@@ -376,8 +398,8 @@ assert(
   "Kakao Android SDK v2-user is a Gradle dependency"
 );
 assert(
-  appGradle.includes("versionCode 14") && appGradle.includes('versionName "1.0.9"'),
-  "Play candidate versionCode 14 / versionName 1.0.9"
+  appGradle.includes("versionCode 15") && appGradle.includes('versionName "1.0.10"'),
+  "Play candidate versionCode 15 / versionName 1.0.10"
 );
 assert(
   !appGradle.includes("length()") &&
@@ -755,8 +777,8 @@ assert(
     read("src/lib/chatPhotoAdaptive.ts").includes("decodeCourseReportPhotoSource"),
   "JS heic-to fallback remains"
 );
-assert(appGradle.includes("versionCode 14"), "versionCode stays 14");
-assert(appGradle.includes('versionName "1.0.9"'), "versionName stays 1.0.9");
+assert(appGradle.includes("versionCode 15"), "versionCode stays 15");
+assert(appGradle.includes('versionName "1.0.10"'), "versionName stays 1.0.10");
 
 if (failed) {
   console.error(`\nFAILED ${failed} / ${passed + failed}`);
