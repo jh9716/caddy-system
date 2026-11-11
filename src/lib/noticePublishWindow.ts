@@ -7,12 +7,14 @@
 import { addDays } from "@/lib/krHolidays";
 import {
   formatKstDateTimeLocal,
+  formatKstDisplay,
   kstStartOfDay,
   kstYmd,
   parseKstDateTimeLocal,
   tryParseKstDateTimeLocal,
 } from "@/lib/kstDate";
 import {
+  NOTICE_PUBLISH_END_EXCLUSIVE_HINT,
   NOTICE_PUBLISH_FILTERS,
   NOTICE_PUBLISH_MODE_LABELS,
   NOTICE_PUBLISH_QUICK_RANGE_LABELS,
@@ -199,9 +201,74 @@ export function parseNoticePublishFilter(raw: unknown): NoticePublishFilter {
   return "all";
 }
 
+export function isKstMidnight(value: Date | null | undefined): boolean {
+  if (!value) return false;
+  return formatKstDateTimeLocal(value).endsWith("T00:00");
+}
+
+export function kstYmdFromInstant(value: Date): string {
+  return formatKstDateTimeLocal(value).slice(0, 10);
+}
+
+/** Date-only end is stored as next-day 00:00 KST, so the picker shows the previous calendar day. */
+export function inclusiveEndYmdFromExclusiveEnd(end: Date): string {
+  const ymd = kstYmdFromInstant(end);
+  return isKstMidnight(end) ? addDays(ymd, -1) : ymd;
+}
+
+export function inferCustomNoticeTime(value: Date | null | undefined): boolean {
+  return Boolean(value && !isKstMidnight(value));
+}
+
+export function noticeWindowFromDateInputs(input: {
+  startYmd: string;
+  endYmd: string;
+  customStart: boolean;
+  customEnd: boolean;
+  startLocal: string;
+  endLocal: string;
+}): NoticePublishFields {
+  let publishStartAt: Date | null = null;
+  let publishEndAt: Date | null = null;
+  if (input.customStart) {
+    publishStartAt = parseNoticePublishInstant(input.startLocal);
+  } else if (input.startYmd) {
+    publishStartAt = kstStartOfDay(input.startYmd);
+  }
+  if (input.customEnd) {
+    publishEndAt = parseNoticePublishInstant(input.endLocal);
+  } else if (input.endYmd) {
+    publishEndAt = kstExclusiveEndOfDay(input.endYmd);
+  }
+  return { publishStartAt, publishEndAt };
+}
+
+export function noticePublishEndGuidance(input: {
+  end: Date | null;
+  customEnd: boolean;
+  endYmd: string;
+}): string {
+  if (input.customEnd && input.end) {
+    const when = formatKstDisplay(input.end, "ymd-hm");
+    return `직접 지정한 종료 시각은 한국시간 ${when}입니다. 이 시각부터 캐디에게 숨겨집니다.`;
+  }
+  if (input.endYmd) {
+    return `종료일 ${input.endYmd}은 그날 하루가 끝날 때까지 보입니다. 다음날 0시부터 캐디에게 숨겨집니다.`;
+  }
+  return NOTICE_PUBLISH_END_EXCLUSIVE_HINT;
+}
+
+export function isNoticePublishRangeInvalid(
+  start: Date | null,
+  end: Date | null
+): boolean {
+  return Boolean(start && end && start.getTime() >= end.getTime());
+}
+
+/** @deprecated use isNoticePublishRangeInvalid — equal times are also invalid. */
 export function startIsAfterEnd(
   start: Date | null,
   end: Date | null
 ): boolean {
-  return Boolean(start && end && start.getTime() > end.getTime());
+  return isNoticePublishRangeInvalid(start, end);
 }

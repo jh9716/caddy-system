@@ -2,7 +2,8 @@
 
 import {
   NOTICE_PUBLISH_CLEAR_LABEL,
-  NOTICE_PUBLISH_END_EXCLUSIVE_HINT,
+  NOTICE_PUBLISH_CUSTOM_TIME_LABEL,
+  NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE,
   NOTICE_PUBLISH_MODE_HINTS,
   NOTICE_PUBLISH_MODE_LABELS,
   NOTICE_PUBLISH_MODES,
@@ -14,16 +15,28 @@ import {
   type NoticePublishQuickRange,
   type NoticePublishStatus,
 } from "@/lib/noticeConstants";
+import { formatKstDateTimeLocal } from "@/lib/kstDate";
+import {
+  inclusiveEndYmdFromExclusiveEnd,
+  kstExclusiveEndOfDay,
+  kstYmdFromInstant,
+  noticePublishEndGuidance,
+  parseNoticePublishInstant,
+} from "@/lib/noticePublishWindow";
 
 type Props = {
   mode: NoticePublishMode;
   startLocal: string;
   endLocal: string;
+  customStartTime: boolean;
+  customEndTime: boolean;
   status: NoticePublishStatus;
   scheduled: boolean;
   onModeChange: (mode: NoticePublishMode) => void;
   onStartChange: (value: string) => void;
   onEndChange: (value: string) => void;
+  onCustomStartTimeChange: (value: boolean) => void;
+  onCustomEndTimeChange: (value: boolean) => void;
   onQuickRange: (key: NoticePublishQuickRange) => void;
   invalidWindow: boolean;
 };
@@ -32,17 +45,63 @@ export default function NoticePublishWindowFields({
   mode,
   startLocal,
   endLocal,
+  customStartTime,
+  customEndTime,
   status,
   scheduled,
   onModeChange,
   onStartChange,
   onEndChange,
+  onCustomStartTimeChange,
+  onCustomEndTimeChange,
   onQuickRange,
   invalidWindow,
 }: Props) {
-  const showDates = mode !== "always";
+  const startInstant = parseNoticePublishInstant(startLocal || null);
+  const endInstant = parseNoticePublishInstant(endLocal || null);
+  const startYmd = startInstant ? kstYmdFromInstant(startInstant) : "";
+  const endYmd = endInstant
+    ? customEndTime
+      ? kstYmdFromInstant(endInstant)
+      : inclusiveEndYmdFromExclusiveEnd(endInstant)
+    : "";
   const showQuick = mode === "range";
-  const showTimeFields = mode === "range" || mode === "scheduled";
+  const showRangeDates = mode === "range";
+  const showScheduledTimes = mode === "scheduled";
+  const endHint = noticePublishEndGuidance({
+    end: endInstant,
+    customEnd: customEndTime,
+    endYmd,
+  });
+
+  function onStartDateChange(ymd: string) {
+    if (!ymd) {
+      onStartChange("");
+      return;
+    }
+    onStartChange(`${ymd}T00:00`);
+  }
+
+  function onEndDateChange(ymd: string) {
+    if (!ymd) {
+      onEndChange("");
+      return;
+    }
+    onEndChange(formatKstDateTimeLocal(kstExclusiveEndOfDay(ymd)));
+  }
+
+  function toggleCustomStart(next: boolean) {
+    onCustomStartTimeChange(next);
+    if (!next && startYmd) onStartChange(`${startYmd}T00:00`);
+  }
+
+  function toggleCustomEnd(next: boolean) {
+    onCustomEndTimeChange(next);
+    if (!next && endInstant) {
+      const ymd = inclusiveEndYmdFromExclusiveEnd(endInstant);
+      onEndChange(formatKstDateTimeLocal(kstExclusiveEndOfDay(ymd)));
+    }
+  }
 
   return (
     <fieldset className="notice-publish">
@@ -83,10 +142,112 @@ export default function NoticePublishWindowFields({
         </div>
       ) : null}
 
-      {showDates && showTimeFields ? (
+      {showRangeDates ? (
+        <div className="notice-publish-dates">
+          {customStartTime ? (
+            <label className="notice-field notice-publish-custom-time">
+              <span>시작 시각 (한국시간)</span>
+              <span className="notice-publish-date-row">
+                <input
+                  type="datetime-local"
+                  value={startLocal}
+                  onChange={(e) => onStartChange(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="ui-btn ui-btn-ghost notice-publish-clear"
+                  onClick={() => onStartChange("")}
+                >
+                  {NOTICE_PUBLISH_CLEAR_LABEL}
+                </button>
+              </span>
+            </label>
+          ) : (
+            <label className="notice-field">
+              <span>시작일</span>
+              <span className="notice-publish-date-row">
+                <input
+                  type="date"
+                  value={startYmd}
+                  onChange={(e) => onStartDateChange(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="ui-btn ui-btn-ghost notice-publish-clear"
+                  onClick={() => onStartChange("")}
+                >
+                  {NOTICE_PUBLISH_CLEAR_LABEL}
+                </button>
+              </span>
+            </label>
+          )}
+          <label className="notice-check notice-publish-custom-toggle">
+            <input
+              type="checkbox"
+              checked={customStartTime}
+              onChange={(e) => toggleCustomStart(e.currentTarget.checked)}
+            />
+            {NOTICE_PUBLISH_CUSTOM_TIME_LABEL}
+          </label>
+
+          {customEndTime ? (
+            <label className="notice-field notice-publish-custom-time">
+              <span>종료 시각 (한국시간, 이 시각부터 숨김)</span>
+              <span className="notice-publish-date-row">
+                <input
+                  type="datetime-local"
+                  value={endLocal}
+                  onChange={(e) => onEndChange(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="ui-btn ui-btn-ghost notice-publish-clear"
+                  onClick={() => onEndChange("")}
+                >
+                  {NOTICE_PUBLISH_CLEAR_LABEL}
+                </button>
+              </span>
+            </label>
+          ) : (
+            <label className="notice-field">
+              <span>종료일</span>
+              <span className="notice-publish-date-row">
+                <input
+                  type="date"
+                  value={endYmd}
+                  onChange={(e) => onEndDateChange(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="ui-btn ui-btn-ghost notice-publish-clear"
+                  onClick={() => onEndChange("")}
+                >
+                  {NOTICE_PUBLISH_CLEAR_LABEL}
+                </button>
+              </span>
+            </label>
+          )}
+          <label className="notice-check notice-publish-custom-toggle">
+            <input
+              type="checkbox"
+              checked={customEndTime}
+              onChange={(e) => toggleCustomEnd(e.currentTarget.checked)}
+            />
+            {NOTICE_PUBLISH_CUSTOM_TIME_LABEL}
+          </label>
+          <p
+            className={`notice-publish-end-hint${customEndTime ? " is-custom" : ""}`}
+            role="status"
+          >
+            {endHint}
+          </p>
+        </div>
+      ) : null}
+
+      {showScheduledTimes ? (
         <div className="notice-publish-dates">
           <label className="notice-field">
-            <span>{mode === "scheduled" ? "게시 시작 (필수)" : "게시 시작"}</span>
+            <span>게시 시작 (필수)</span>
             <span className="notice-publish-date-row">
               <input
                 type="datetime-local"
@@ -103,12 +264,12 @@ export default function NoticePublishWindowFields({
             </span>
           </label>
           <label className="notice-field">
-            <span>{mode === "scheduled" ? "게시 종료 (선택)" : "게시 종료"}</span>
+            <span>게시 종료일 (선택)</span>
             <span className="notice-publish-date-row">
               <input
-                type="datetime-local"
-                value={endLocal}
-                onChange={(e) => onEndChange(e.target.value)}
+                type="date"
+                value={endYmd}
+                onChange={(e) => onEndDateChange(e.target.value)}
               />
               <button
                 type="button"
@@ -119,7 +280,35 @@ export default function NoticePublishWindowFields({
               </button>
             </span>
           </label>
-          <p className="notice-publish-end-hint">{NOTICE_PUBLISH_END_EXCLUSIVE_HINT}</p>
+          <label className="notice-check notice-publish-custom-toggle">
+            <input
+              type="checkbox"
+              checked={customEndTime}
+              disabled={!endYmd && !endLocal}
+              onChange={(e) => toggleCustomEnd(e.currentTarget.checked)}
+            />
+            {NOTICE_PUBLISH_CUSTOM_TIME_LABEL}
+          </label>
+          {customEndTime ? (
+            <label className="notice-field notice-publish-custom-time">
+              <span>종료 시각 (한국시간, 이 시각부터 숨김)</span>
+              <input
+                type="datetime-local"
+                value={endLocal}
+                onChange={(e) => onEndChange(e.target.value)}
+              />
+            </label>
+          ) : null}
+          {endYmd || endLocal ? (
+            <p
+              className={`notice-publish-end-hint${customEndTime ? " is-custom" : ""}`}
+              role="status"
+            >
+              {endHint}
+            </p>
+          ) : (
+            <p className="notice-publish-end-hint">종료일을 비우면 시작 이후 계속 보입니다.</p>
+          )}
         </div>
       ) : null}
 
@@ -135,7 +324,7 @@ export default function NoticePublishWindowFields({
       </p>
       {invalidWindow ? (
         <p className="notice-publish-error" role="alert">
-          게시 시작일이 종료일보다 늦을 수 없습니다.
+          {NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE}
         </p>
       ) : null}
       {scheduled ? (

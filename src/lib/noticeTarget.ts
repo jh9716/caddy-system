@@ -3,6 +3,7 @@ import { DRIVING_POOL_TEAM, isPrimaryTeam } from "@/lib/caddyManage";
 import {
   NOTICE_CADDY_TYPES,
   NOTICE_LIST_ORDER,
+  NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE,
   NOTICE_TARGET_ALL,
   NOTICE_TARGET_CADDY_TYPE,
   NOTICE_TARGET_TEAM,
@@ -115,15 +116,24 @@ export function parseNoticePublishWindow(input: {
   } = {};
   if (publishStartAt !== undefined) out.publishStartAt = publishStartAt;
   if (publishEndAt !== undefined) out.publishEndAt = publishEndAt;
-  const start = publishStartAt === undefined ? undefined : publishStartAt;
-  const end = publishEndAt === undefined ? undefined : publishEndAt;
-  if (start && end && start.getTime() > end.getTime()) {
+  assertNoticePublishOrder(
+    publishStartAt === undefined ? undefined : publishStartAt,
+    publishEndAt === undefined ? undefined : publishEndAt
+  );
+  return out;
+}
+
+/** Both bounds required to compare. One-sided or both-null windows stay valid. */
+export function assertNoticePublishOrder(
+  start: Date | null | undefined,
+  end: Date | null | undefined
+) {
+  if (start && end && start.getTime() >= end.getTime()) {
     throw new NoticeValidationError(
       "invalid_window",
-      "게시 시작일이 종료일보다 늦을 수 없습니다."
+      NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE
     );
   }
-  return out;
 }
 
 /** PATCH/POST both accept schema `content` and legacy form `body`. */

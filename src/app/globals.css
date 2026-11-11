@@ -3149,6 +3149,25 @@ html.vh-chat-open .vh-work-inner,
   color: var(--vh-danger);
 }
 
+.notice-publish-custom-toggle {
+  margin: 0;
+}
+
+.notice-publish-custom-time {
+  padding: 10px 12px;
+  border: 1px solid var(--vh-border-strong);
+  border-radius: var(--vh-radius-sm);
+  background: #fff8e8;
+}
+
+.notice-publish-end-hint.is-custom {
+  padding: 8px 12px;
+  border-radius: var(--vh-radius-sm);
+  background: #fff8e8;
+  color: var(--vh-ink-soft);
+  font-weight: 700;
+}
+
 body.manage-mode .vh-work-inner:has(.notice-page),
 body.manage-mode .vh-work-inner:has(.course-report-page) {
   padding-bottom: calc(

@@ -9,24 +9,31 @@ import {
   kstStartOfDay,
   parseKstDateTimeLocal,
 } from "../src/lib/kstDate";
+import { NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE } from "../src/lib/noticeConstants";
 import {
   adminNoticePublishWhere,
+  assertNoticePublishOrder,
   isNoticeInPublishWindow,
+  parseNoticeWriteBody,
   visibleNoticeWhere,
 } from "../src/lib/noticeTarget";
 import {
   applyNoticePublishMode,
+  inclusiveEndYmdFromExclusiveEnd,
+  inferCustomNoticeTime,
   inferNoticePublishMode,
+  isNoticePublishRangeInvalid,
   kstExclusiveEndOfDay,
   noticeDateOnlyWindow,
+  noticePublishEndGuidance,
   noticePublishStatus,
   noticeQuickRangeWindow,
   noticeScheduledDefaultWindow,
   noticeTodayOnlyWindow,
+  noticeWindowFromDateInputs,
   parseNoticePublishFilter,
   parseNoticePublishInstant,
   serializeNoticeDatetimeLocal,
-  startIsAfterEnd,
   toNoticeDatetimeLocalValue,
 } from "../src/lib/noticePublishWindow";
 
@@ -161,12 +168,121 @@ section("mode apply / infer preserves custom times");
   assert(inferNoticePublishMode(scheduled, NOW) === "scheduled", "future start infers 예약");
 }
 
-section("start after end blocked");
+section("start >= end blocked; one-sided and null stay valid");
 {
   const start = parseKstDateTimeLocal("2026-11-12T00:00");
   const end = parseKstDateTimeLocal("2026-11-11T00:00");
-  assert(startIsAfterEnd(start, end) === true, "start > end detected");
-  assert(startIsAfterEnd(end, start) === false, "valid order accepted");
+  const same = parseKstDateTimeLocal("2026-11-11T09:00");
+  assert(isNoticePublishRangeInvalid(start, end) === true, "start > end detected");
+  assert(isNoticePublishRangeInvalid(same, same) === true, "start === end detected");
+  assert(isNoticePublishRangeInvalid(end, start) === false, "valid order accepted");
+  assert(isNoticePublishRangeInvalid(start, null) === false, "start-only allowed");
+  assert(isNoticePublishRangeInvalid(null, end) === false, "end-only allowed");
+  assert(isNoticePublishRangeInvalid(null, null) === false, "null/null allowed");
+  let threw = false;
+  try {
+    parseNoticeWriteBody(
+      {
+        title: "same",
+        content: "x",
+        publishStartAt: same.toISOString(),
+        publishEndAt: same.toISOString(),
+      },
+      "create"
+    );
+  } catch (e) {
+    threw = e instanceof Error && e.message === NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE;
+  }
+  assert(threw, "server create rejects equal start/end");
+  threw = false;
+  try {
+    assertNoticePublishOrder(same, same);
+  } catch (e) {
+    threw = e instanceof Error && e.message === NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE;
+  }
+  assert(threw, "assertNoticePublishOrder rejects equal times");
+  const open = parseNoticeWriteBody(
+    { title: "open", content: "x", publishStartAt: null, publishEndAt: null },
+    "create"
+  );
+  assert(open.publishStartAt == null && open.publishEndAt == null, "null window still saves");
+  const startOnly = parseNoticeWriteBody(
+    {
+      title: "start-only",
+      content: "x",
+      publishStartAt: start.toISOString(),
+      publishEndAt: null,
+    },
+    "create"
+  );
+  assert(startOnly.publishEndAt == null, "start-only still saves");
+}
+
+section("date-first range vs custom time");
+{
+  const dateOnly = noticeWindowFromDateInputs({
+    startYmd: "2026-11-11",
+    endYmd: "2026-11-11",
+    customStart: false,
+    customEnd: false,
+    startLocal: "",
+    endLocal: "",
+  });
+  assert(
+    dateOnly.publishStartAt?.toISOString() === "2026-11-10T15:00:00.000Z",
+    "date-only start is 00:00 KST"
+  );
+  assert(
+    dateOnly.publishEndAt?.toISOString() === "2026-11-11T15:00:00.000Z",
+    "date-only end is next-day 00:00 KST"
+  );
+  assert(
+    inclusiveEndYmdFromExclusiveEnd(dateOnly.publishEndAt!) === "2026-11-11",
+    "exclusive midnight displays as inclusive end date"
+  );
+  assert(inferCustomNoticeTime(dateOnly.publishStartAt) === false, "midnight start is not custom");
+  assert(inferCustomNoticeTime(dateOnly.publishEndAt) === false, "midnight end is not custom");
+  const at2359 = new Date("2026-11-11T23:59:00+09:00");
+  const atMidnight = new Date("2026-11-12T00:00:00+09:00");
+  assert(isNoticeInPublishWindow(dateOnly, at2359) === true, "visible at 23:59 KST");
+  assert(isNoticeInPublishWindow(dateOnly, atMidnight) === false, "hidden at next-day 00:00");
+  const custom = noticeWindowFromDateInputs({
+    startYmd: "2026-11-11",
+    endYmd: "2026-11-11",
+    customStart: true,
+    customEnd: true,
+    startLocal: "2026-11-11T09:00",
+    endLocal: "2026-11-11T18:00",
+  });
+  assert(
+    custom.publishStartAt?.toISOString() === parseKstDateTimeLocal("2026-11-11T09:00").toISOString(),
+    "custom start keeps 09:00"
+  );
+  assert(
+    custom.publishEndAt?.toISOString() === parseKstDateTimeLocal("2026-11-11T18:00").toISOString(),
+    "custom end keeps 18:00"
+  );
+  assert(
+    isNoticeInPublishWindow(custom, new Date("2026-11-11T17:59:00+09:00")) === true,
+    "custom end still visible at 17:59"
+  );
+  assert(
+    isNoticeInPublishWindow(custom, new Date("2026-11-11T18:00:00+09:00")) === false,
+    "custom end hidden at exact 18:00"
+  );
+  const customHint = noticePublishEndGuidance({
+    end: custom.publishEndAt,
+    customEnd: true,
+    endYmd: "2026-11-11",
+  });
+  assert(customHint.includes("2026-11-11 18:00"), "custom hint shows exact KST time");
+  assert(customHint.includes("이 시각부터"), "custom hint says hide from that instant");
+  const dateHint = noticePublishEndGuidance({
+    end: dateOnly.publishEndAt,
+    customEnd: false,
+    endYmd: "2026-11-11",
+  });
+  assert(dateHint.includes("끝날 때까지"), "date-only hint keeps end-of-day copy");
 }
 
 section("admin filter vs caddy visibility");
@@ -218,9 +334,14 @@ section("source guards — no schema/push/android change");
   const schema = read("prisma/schema.prisma");
   const fields = read("src/components/notice/NoticePublishWindowFields.tsx");
   const autoPush = read("src/lib/noticeAutoPush.ts");
-  assert(form.includes("serializeNoticeDatetimeLocal"), "form saves KST datetime-local");
+  assert(form.includes("noticeWindowFromDateInputs"), "form saves date-first window");
+  assert(form.includes("NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE"), "form uses shared invalid-window copy");
   assert(!form.includes("toDatetimeLocalValue"), "form dropped device-TZ helper");
   assert(!form.includes("new Date(publishStartAt).toISOString()"), "form does not use device TZ ISO");
+  assert(fields.includes('type="date"'), "range UI is date-first");
+  assert(fields.includes("NOTICE_PUBLISH_CUSTOM_TIME_LABEL"), "custom time toggle exists");
+  assert(target.includes("assertNoticePublishOrder"), "PATCH/create share order assert");
+  assert(target.includes("start.getTime() >= end.getTime()"), "server rejects start >= end");
   assert(form.includes("NOTICE_PHOTO_MAX"), "photo attach kept");
   assert(form.includes("NOTICE_FILE_MAX"), "file attach kept");
   assert(form.includes("classifyNoticeClipboard"), "clipboard paste kept");

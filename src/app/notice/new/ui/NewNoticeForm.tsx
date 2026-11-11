@@ -6,6 +6,7 @@ import {
   NOTICE_CADDY_TYPES,
   NOTICE_CREATE_SEND_PUSH_LABEL,
   NOTICE_EDIT_SEND_PUSH_LABEL,
+  NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE,
   NOTICE_TARGET_ALL,
   NOTICE_TARGET_CADDY_TYPE,
   NOTICE_TARGET_TEAM,
@@ -15,12 +16,15 @@ import {
 import { isFutureNoticeStart, planNoticeClientAutoPush } from '@/lib/noticeAutoPushPlan'
 import {
   applyNoticePublishMode,
+  inclusiveEndYmdFromExclusiveEnd,
+  inferCustomNoticeTime,
   inferNoticePublishMode,
+  isNoticePublishRangeInvalid,
+  kstYmdFromInstant,
   noticePublishStatus,
   noticeQuickRangeWindow,
+  noticeWindowFromDateInputs,
   parseNoticePublishInstant,
-  serializeNoticeDatetimeLocal,
-  startIsAfterEnd,
   toNoticeDatetimeLocalValue,
 } from '@/lib/noticePublishWindow'
 import NoticePublishWindowFields from '@/components/notice/NoticePublishWindowFields'
@@ -126,6 +130,12 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
       publishEndAt: parseNoticePublishInstant(initial?.publishEndAt),
     })
   )
+  const [customStartTime, setCustomStartTime] = useState(() =>
+    inferCustomNoticeTime(parseNoticePublishInstant(initial?.publishStartAt))
+  )
+  const [customEndTime, setCustomEndTime] = useState(() =>
+    inferCustomNoticeTime(parseNoticePublishInstant(initial?.publishEndAt))
+  )
   const [sendPush, setSendPush] = useState(mode !== 'edit')
   const [busy, setBusy] = useState(false)
   const [statusNote, setStatusNote] = useState('')
@@ -154,7 +164,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
     publishStartAt: publishMode === 'always' ? null : startInstant,
     publishEndAt: publishMode === 'always' ? null : endInstant,
   })
-  const invalidWindow = startIsAfterEnd(startInstant, endInstant)
+  const invalidWindow = isNoticePublishRangeInvalid(startInstant, endInstant)
   busyRef.current = busy
   existingCountRef.current = existingPhotos.length
   const totalPhotos = existingPhotos.length + pending.length
@@ -192,10 +202,14 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
     )
     setPublishMode(next)
     applyPublishFields(applied)
+    setCustomStartTime(inferCustomNoticeTime(applied.publishStartAt))
+    setCustomEndTime(inferCustomNoticeTime(applied.publishEndAt))
   }
 
   function onQuickRange(key: NoticePublishQuickRange) {
     applyPublishFields(noticeQuickRangeWindow(key))
+    setCustomStartTime(false)
+    setCustomEndTime(false)
   }
 
   function photoRoomLeft() {
@@ -453,12 +467,24 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
           setStatusNote('예약 게시는 시작일이 필요합니다.')
           return
         }
-        if (startIsAfterEnd(startInstant, endInstant)) {
-          setStatusNote('게시 시작일이 종료일보다 늦을 수 없습니다.')
+        const win = noticeWindowFromDateInputs({
+          startYmd: startInstant ? kstYmdFromInstant(startInstant) : '',
+          endYmd: endInstant
+            ? customEndTime
+              ? kstYmdFromInstant(endInstant)
+              : inclusiveEndYmdFromExclusiveEnd(endInstant)
+            : '',
+          customStart: publishMode === 'scheduled' || customStartTime,
+          customEnd: customEndTime,
+          startLocal: publishStartAt,
+          endLocal: publishEndAt,
+        })
+        if (isNoticePublishRangeInvalid(win.publishStartAt, win.publishEndAt)) {
+          setStatusNote(NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE)
           return
         }
-        startIso = publishStartAt ? serializeNoticeDatetimeLocal(publishStartAt) : null
-        endIso = publishEndAt ? serializeNoticeDatetimeLocal(publishEndAt) : null
+        startIso = win.publishStartAt ? win.publishStartAt.toISOString() : null
+        endIso = win.publishEndAt ? win.publishEndAt.toISOString() : null
       }
       const submitStart = parseNoticePublishInstant(startIso)
       const plan = planNoticeClientAutoPush({
@@ -812,11 +838,15 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         mode={publishMode}
         startLocal={publishStartAt}
         endLocal={publishEndAt}
+        customStartTime={customStartTime}
+        customEndTime={customEndTime}
         status={publishStatus}
         scheduled={scheduled}
         onModeChange={onPublishModeChange}
         onStartChange={setPublishStartAt}
         onEndChange={setPublishEndAt}
+        onCustomStartTimeChange={setCustomStartTime}
+        onCustomEndTimeChange={setCustomEndTime}
         onQuickRange={onQuickRange}
         invalidWindow={invalidWindow}
       />
