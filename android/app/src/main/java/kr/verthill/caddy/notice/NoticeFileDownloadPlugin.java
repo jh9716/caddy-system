@@ -20,7 +20,6 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
-import kr.verthill.caddy.BuildConfig;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -212,7 +211,9 @@ public class NoticeFileDownloadPlugin extends Plugin {
     }
 
     private static void rejectDownload(PluginCall call, NoticeFileDownloadException e) {
-        if (BuildConfig.DEBUG && e.stage != null && !e.stage.isEmpty()) {
+        if (NoticeFileDownloadFlavorHosts.includeDebugStage()
+            && e.stage != null
+            && !e.stage.isEmpty()) {
             JSObject data = new JSObject();
             data.put("stage", e.stage);
             call.reject(e.code, e.code, data);

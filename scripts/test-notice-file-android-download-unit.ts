@@ -272,6 +272,11 @@ async function main() {
     "missing page URL is invalid_url/page_url"
   );
   assert(
+    plugin.includes("NoticeFileDownloadFlavorHosts.includeDebugStage()") &&
+      !plugin.includes("BuildConfig"),
+    "debug stage uses FlavorHosts, not BuildConfig"
+  );
+  assert(
     read(
       "android/app/src/debug/java/kr/verthill/caddy/notice/NoticeFileDownloadFlavorHosts.java"
     ).includes('return "";') &&

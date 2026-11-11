@@ -37,4 +37,8 @@ public final class NoticeFileDownloadFlavorHosts {
     static String fallbackHostWhenPageUrlMissing() {
         return "";
     }
+
+    static boolean includeDebugStage() {
+        return true;
+    }
 }
