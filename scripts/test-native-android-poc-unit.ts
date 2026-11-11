@@ -210,9 +210,18 @@ assert(
   "KakaoNativeAuth plugin registered"
 );
 assert(
+  mainActivity.includes("registerPlugin(NoticeFileDownloadPlugin.class)"),
+  "NoticeFileDownload plugin registered"
+);
+assert(
   mainActivity.indexOf("registerPlugin(KakaoNativeAuthPlugin.class)") <
     mainActivity.indexOf("super.onCreate(savedInstanceState)"),
   "KakaoNativeAuth still registers before BridgeActivity onCreate"
+);
+assert(
+  mainActivity.indexOf("registerPlugin(NoticeFileDownloadPlugin.class)") <
+    mainActivity.indexOf("super.onCreate(savedInstanceState)"),
+  "NoticeFileDownload still registers before BridgeActivity onCreate"
 );
 assert(
   mainActivity.includes("new VerthillBridgeWebChromeClient(bridge)"),
@@ -288,6 +297,15 @@ assert(!manifest.includes("READ_MEDIA_IMAGES"), "no READ_MEDIA_IMAGES permission
 assert(
   !manifest.includes("READ_EXTERNAL_STORAGE"),
   "no READ_EXTERNAL_STORAGE permission"
+);
+assert(
+  !manifest.includes("MANAGE_EXTERNAL_STORAGE"),
+  "no MANAGE_EXTERNAL_STORAGE permission"
+);
+assert(
+  manifest.includes("WRITE_EXTERNAL_STORAGE") &&
+    manifest.includes('android:maxSdkVersion="28"'),
+  "legacy WRITE_EXTERNAL_STORAGE is maxSdk 28"
 );
 assert(
   manifest.includes("POST_NOTIFICATIONS"),

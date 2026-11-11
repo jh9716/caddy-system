@@ -212,6 +212,28 @@ async function main() {
     "photo inputs do not use capture= (Capacitor camera FileProvider unused)"
   );
 
+  console.log("== notice file native download ==");
+  const noticePlugin = read(
+    "android/app/src/main/java/kr/verthill/caddy/notice/NoticeFileDownloadPlugin.java"
+  );
+  assert(
+    noticePlugin.includes("CookieManager.getInstance().getCookie") &&
+      !noticePlugin.includes("getString(\"url\"") &&
+      !noticePlugin.includes("Base64"),
+    "notice download uses WebView cookies and a path, not a URL/Base64 bridge"
+  );
+  assert(
+    manifest.includes("WRITE_EXTERNAL_STORAGE") &&
+      manifest.includes('android:maxSdkVersion="28"') &&
+      !manifest.includes("MANAGE_EXTERNAL_STORAGE"),
+    "legacy Downloads write is maxSdk 28 only"
+  );
+  assert(
+    filePaths.includes('<cache-path name="heic_jpeg" path="heic-jpeg/" />') &&
+      !filePaths.includes("Download"),
+    "FileProvider is not widened for Downloads"
+  );
+
   console.log("== Android version frozen ==");
   assert(appGradle.includes("versionCode 14"), "versionCode 14");
   assert(appGradle.includes('versionName "1.0.9"'), "versionName 1.0.9");

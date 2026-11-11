@@ -2809,6 +2809,10 @@ html.vh-chat-open .vh-work-inner,
   font-size: 13px;
 }
 
+.notice-files-note.is-ok {
+  color: var(--vh-ok);
+}
+
 .notice-file-add {
   position: relative;
   display: inline-flex;

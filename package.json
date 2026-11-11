@@ -219,6 +219,7 @@
     "test:notice-clipboard-paste-unit": "bash scripts/tsx-safe.sh scripts/test-notice-clipboard-paste-unit.ts",
     "test:notice-clipboard-paste-chromium": "bash scripts/tsx-safe.sh scripts/test-notice-clipboard-paste-chromium.ts",
     "test:notice-file-unit": "bash scripts/tsx-safe.sh scripts/test-notice-file-unit.ts",
+    "test:notice-file-android-download-unit": "bash scripts/tsx-safe.sh scripts/test-notice-file-android-download-unit.ts",
     "test:photo-http-cache-unit": "bash scripts/tsx-safe.sh scripts/test-photo-http-cache-unit.ts",
     "test:image-header-size-unit": "bash scripts/tsx-safe.sh scripts/test-image-header-size-unit.ts",
     "test:photo-stream-unit": "bash scripts/tsx-safe.sh scripts/test-photo-stream-unit.ts",
