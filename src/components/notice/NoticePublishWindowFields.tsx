@@ -38,6 +38,7 @@ type Props = {
   onCustomStartTimeChange: (value: boolean) => void;
   onCustomEndTimeChange: (value: boolean) => void;
   onQuickRange: (key: NoticePublishQuickRange) => void;
+  activeQuickRange: NoticePublishQuickRange | null;
   invalidWindow: boolean;
 };
 
@@ -55,6 +56,7 @@ export default function NoticePublishWindowFields({
   onCustomStartTimeChange,
   onCustomEndTimeChange,
   onQuickRange,
+  activeQuickRange,
   invalidWindow,
 }: Props) {
   const startInstant = parseNoticePublishInstant(startLocal || null);
@@ -133,7 +135,8 @@ export default function NoticePublishWindowFields({
             <button
               key={key}
               type="button"
-              className="notice-publish-chip"
+              className={`notice-publish-chip${activeQuickRange === key ? " is-active" : ""}`}
+              aria-pressed={activeQuickRange === key}
               onClick={() => onQuickRange(key)}
             >
               {NOTICE_PUBLISH_QUICK_RANGE_LABELS[key]}
@@ -146,7 +149,7 @@ export default function NoticePublishWindowFields({
         <div className="notice-publish-dates">
           {customStartTime ? (
             <label className="notice-field notice-publish-custom-time">
-              <span>시작 시각 (한국시간)</span>
+              <span>시작 시각</span>
               <span className="notice-publish-date-row">
                 <input
                   type="datetime-local"
@@ -192,7 +195,7 @@ export default function NoticePublishWindowFields({
 
           {customEndTime ? (
             <label className="notice-field notice-publish-custom-time">
-              <span>종료 시각 (한국시간, 이 시각부터 숨김)</span>
+              <span>종료 시각</span>
               <span className="notice-publish-date-row">
                 <input
                   type="datetime-local"
@@ -291,7 +294,7 @@ export default function NoticePublishWindowFields({
           </label>
           {customEndTime ? (
             <label className="notice-field notice-publish-custom-time">
-              <span>종료 시각 (한국시간, 이 시각부터 숨김)</span>
+              <span>종료 시각</span>
               <input
                 type="datetime-local"
                 value={endLocal}

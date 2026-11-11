@@ -9,7 +9,10 @@ import {
   kstStartOfDay,
   parseKstDateTimeLocal,
 } from "../src/lib/kstDate";
-import { NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE } from "../src/lib/noticeConstants";
+import {
+  NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE,
+  NOTICE_PUBLISH_MODE_HINTS,
+} from "../src/lib/noticeConstants";
 import {
   adminNoticePublishWhere,
   assertNoticePublishOrder,
@@ -25,6 +28,8 @@ import {
   isNoticePublishRangeInvalid,
   kstExclusiveEndOfDay,
   noticeDateOnlyWindow,
+  formatNoticeHideFrom,
+  formatNoticeMonthDay,
   noticePublishEndGuidance,
   noticePublishStatus,
   noticeQuickRangeWindow,
@@ -275,14 +280,34 @@ section("date-first range vs custom time");
     customEnd: true,
     endYmd: "2026-11-11",
   });
-  assert(customHint.includes("2026-11-11 18:00"), "custom hint shows exact KST time");
-  assert(customHint.includes("이 시각부터"), "custom hint says hide from that instant");
+  assert(
+    customHint === "11월 11일 18:00부터 공지가 숨겨집니다.",
+    "custom hint shows concise hide time"
+  );
+  const midnightCustom = noticePublishEndGuidance({
+    end: parseKstDateTimeLocal("2026-11-18T00:00"),
+    customEnd: true,
+    endYmd: "2026-11-18",
+  });
+  assert(
+    midnightCustom === "11월 18일 00:00부터 공지가 숨겨집니다.",
+    "custom 00:00 copy matches requested phrasing"
+  );
+  assert(!customHint.includes("한국시간"), "custom hint drops 한국시간");
   const dateHint = noticePublishEndGuidance({
     end: dateOnly.publishEndAt,
     customEnd: false,
     endYmd: "2026-11-11",
   });
-  assert(dateHint.includes("끝날 때까지"), "date-only hint keeps end-of-day copy");
+  assert(
+    dateHint === "11월 11일 하루가 끝날 때까지 보이고, 다음날 0시부터 숨겨집니다.",
+    "date-only hint stays short and KST-day based"
+  );
+  assert(formatNoticeMonthDay("2026-11-18") === "11월 18일", "month-day copy");
+  assert(
+    formatNoticeHideFrom(parseKstDateTimeLocal("2026-11-18T00:00")) === "11월 18일 00:00",
+    "hide-from copy uses KST local time"
+  );
 }
 
 section("admin filter vs caddy visibility");
@@ -333,6 +358,8 @@ section("source guards — no schema/push/android change");
   const target = read("src/lib/noticeTarget.ts");
   const schema = read("prisma/schema.prisma");
   const fields = read("src/components/notice/NoticePublishWindowFields.tsx");
+  const constants = read("src/lib/noticeConstants.ts");
+  const css = read("src/app/globals.css");
   const autoPush = read("src/lib/noticeAutoPush.ts");
   assert(form.includes("noticeWindowFromDateInputs"), "form saves date-first window");
   assert(form.includes("NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE"), "form uses shared invalid-window copy");
@@ -340,6 +367,15 @@ section("source guards — no schema/push/android change");
   assert(!form.includes("new Date(publishStartAt).toISOString()"), "form does not use device TZ ISO");
   assert(fields.includes('type="date"'), "range UI is date-first");
   assert(fields.includes("NOTICE_PUBLISH_CUSTOM_TIME_LABEL"), "custom time toggle exists");
+  assert(!fields.includes("한국시간"), "fields copy drops 한국시간");
+  assert(!NOTICE_PUBLISH_MODE_HINTS.today.includes("한국시간"), "today hint drops 한국시간");
+  assert(!constants.includes("한국시간"), "publish constants drop 한국시간");
+  assert(fields.includes("activeQuickRange === key"), "quick chips highlight selected range");
+  assert(fields.includes("aria-pressed"), "quick chips expose pressed state");
+  assert(form.includes("setActiveQuickRange(key)"), "quick click selects chip");
+  assert(form.includes("setActiveQuickRange(null)"), "manual date edit clears chip");
+  assert(css.includes(".notice-publish-chip.is-active"), "chip active uses VERTHILL theme");
+  assert(css.includes("var(--vh-green-900)"), "active chip uses VERTHILL green");
   assert(target.includes("assertNoticePublishOrder"), "PATCH/create share order assert");
   assert(target.includes("start.getTime() >= end.getTime()"), "server rejects start >= end");
   assert(form.includes("NOTICE_PHOTO_MAX"), "photo attach kept");

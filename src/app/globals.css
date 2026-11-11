@@ -3086,6 +3086,19 @@ html.vh-chat-open .vh-work-inner,
 .notice-publish-chip,
 .notice-publish-quick .notice-publish-chip {
   cursor: pointer;
+  appearance: none;
+  font-family: inherit;
+}
+
+.notice-publish-quick .notice-publish-chip.is-active {
+  background: var(--vh-green-900);
+  border-color: var(--vh-green-900);
+  color: #fff;
+}
+
+.notice-publish-quick .notice-publish-chip:focus-visible {
+  outline: 2px solid var(--vh-green-700);
+  outline-offset: 2px;
 }
 
 .notice-publish-dates {

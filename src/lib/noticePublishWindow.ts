@@ -7,7 +7,6 @@
 import { addDays } from "@/lib/krHolidays";
 import {
   formatKstDateTimeLocal,
-  formatKstDisplay,
   kstStartOfDay,
   kstYmd,
   parseKstDateTimeLocal,
@@ -243,17 +242,29 @@ export function noticeWindowFromDateInputs(input: {
   return { publishStartAt, publishEndAt };
 }
 
+/** User-facing month-day, e.g. 2026-11-18 → "11월 18일". Instant math stays KST. */
+export function formatNoticeMonthDay(ymd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd ?? "").trim());
+  if (!m) return ymd;
+  return `${Number(m[2])}월 ${Number(m[3])}일`;
+}
+
+/** User-facing hide time, e.g. 2026-11-18 00:00 KST → "11월 18일 00:00". */
+export function formatNoticeHideFrom(end: Date): string {
+  const local = formatKstDateTimeLocal(end);
+  return `${formatNoticeMonthDay(local.slice(0, 10))} ${local.slice(11, 16)}`;
+}
+
 export function noticePublishEndGuidance(input: {
   end: Date | null;
   customEnd: boolean;
   endYmd: string;
 }): string {
   if (input.customEnd && input.end) {
-    const when = formatKstDisplay(input.end, "ymd-hm");
-    return `직접 지정한 종료 시각은 한국시간 ${when}입니다. 이 시각부터 캐디에게 숨겨집니다.`;
+    return `${formatNoticeHideFrom(input.end)}부터 공지가 숨겨집니다.`;
   }
   if (input.endYmd) {
-    return `종료일 ${input.endYmd}은 그날 하루가 끝날 때까지 보입니다. 다음날 0시부터 캐디에게 숨겨집니다.`;
+    return `${formatNoticeMonthDay(input.endYmd)} 하루가 끝날 때까지 보이고, 다음날 0시부터 숨겨집니다.`;
   }
   return NOTICE_PUBLISH_END_EXCLUSIVE_HINT;
 }

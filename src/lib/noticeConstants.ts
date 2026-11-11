@@ -47,9 +47,9 @@ export const NOTICE_PUBLISH_MODE_LABELS: Record<NoticePublishMode, string> = {
 };
 
 export const NOTICE_PUBLISH_MODE_HINTS: Record<NoticePublishMode, string> = {
-  always: "기한을 두지 않습니다. 캐디에게 계속 보입니다.",
-  today: "한국시간 오늘 하루만 보입니다. 내일 0시부터 숨겨집니다.",
-  range: "시작일과 종료일을 고릅니다. 종료일은 그날 끝까지이며, 필요하면 시각을 직접 지정할 수 있습니다.",
+  always: "기한 없이 계속 보입니다.",
+  today: "오늘 하루만 보입니다. 내일 0시부터 숨겨집니다.",
+  range: "시작일과 종료일을 고릅니다. 종료일은 그날 끝까지입니다.",
   scheduled: "지정한 시작 시각부터 보입니다. 종료일은 비워도 됩니다.",
 };
 
@@ -85,7 +85,7 @@ export const NOTICE_PUBLISH_QUICK_RANGE_LABELS: Record<NoticePublishQuickRange, 
 export const NOTICE_PUBLISH_CLEAR_LABEL = "날짜 지우기";
 export const NOTICE_PUBLISH_ALWAYS_PERIOD_LABEL = "기한 없음";
 export const NOTICE_PUBLISH_END_EXCLUSIVE_HINT =
-  "종료일은 그날 하루가 끝날 때까지입니다. 다음날 0시부터 캐디에게 숨겨집니다.";
+  "종료일 하루가 끝날 때까지 보입니다. 다음날 0시부터 숨겨집니다.";
 export const NOTICE_PUBLISH_CUSTOM_TIME_LABEL = "시각 직접 지정";
 export const NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE =
   "게시 시작 시각이 종료 시각과 같거나 더 늦을 수 없습니다. 종료를 더 뒤로 지정해 주세요.";

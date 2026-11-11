@@ -136,6 +136,9 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   const [customEndTime, setCustomEndTime] = useState(() =>
     inferCustomNoticeTime(parseNoticePublishInstant(initial?.publishEndAt))
   )
+  const [activeQuickRange, setActiveQuickRange] = useState<NoticePublishQuickRange | null>(
+    null
+  )
   const [sendPush, setSendPush] = useState(mode !== 'edit')
   const [busy, setBusy] = useState(false)
   const [statusNote, setStatusNote] = useState('')
@@ -204,12 +207,24 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
     applyPublishFields(applied)
     setCustomStartTime(inferCustomNoticeTime(applied.publishStartAt))
     setCustomEndTime(inferCustomNoticeTime(applied.publishEndAt))
+    setActiveQuickRange(null)
   }
 
   function onQuickRange(key: NoticePublishQuickRange) {
     applyPublishFields(noticeQuickRangeWindow(key))
     setCustomStartTime(false)
     setCustomEndTime(false)
+    setActiveQuickRange(key)
+  }
+
+  function onStartChange(value: string) {
+    setPublishStartAt(value)
+    setActiveQuickRange(null)
+  }
+
+  function onEndChange(value: string) {
+    setPublishEndAt(value)
+    setActiveQuickRange(null)
   }
 
   function photoRoomLeft() {
@@ -843,11 +858,12 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         status={publishStatus}
         scheduled={scheduled}
         onModeChange={onPublishModeChange}
-        onStartChange={setPublishStartAt}
-        onEndChange={setPublishEndAt}
+        onStartChange={onStartChange}
+        onEndChange={onEndChange}
         onCustomStartTimeChange={setCustomStartTime}
         onCustomEndTimeChange={setCustomEndTime}
         onQuickRange={onQuickRange}
+        activeQuickRange={activeQuickRange}
         invalidWindow={invalidWindow}
       />
       {scheduled ? null : (
