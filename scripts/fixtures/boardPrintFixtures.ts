@@ -442,3 +442,78 @@ export function manyTwoWorkDraft(date = "2026-11-18"): AssignmentDraft {
   }
   return d;
 }
+
+/**
+ * 2026-11-01 1부 06:07 레이크 하우스 누락 재현용 픽스처 (DB 없음).
+ * 해당 칸은 하우스만 있고 다른 배지는 없다 (모바일에서 Marks 숨김 회귀를 잡기 위함).
+ * 같은 시각 베르힐은 리무진만(주황 하단 띠 재현). 2부·3부와 다른 날짜에도 하우스 칸을 둔다.
+ */
+export function nov1Lake0607HouseDraft(date = "2026-11-01"): AssignmentDraft {
+  const rows: AutoAssignmentRow[] = [];
+  const teeSheet: NonNullable<AssignmentDraft["teeSheet"]> = [];
+  const add = (
+    shift: ShiftPart,
+    course: CourseCode,
+    tee: string,
+    name: string,
+    team: string,
+    teamName: string,
+    opts?: { house?: boolean; limo?: boolean; two?: boolean; lock?: boolean; drive?: boolean; call?: boolean }
+  ) => {
+    const row = printRow({
+      date,
+      shift,
+      course,
+      teeTime: tee,
+      caddyId: 5000 + rows.length,
+      caddyName: name,
+      team,
+      teamName,
+      houseRequest: opts?.house === true,
+      limousineCart: opts?.limo === true,
+    });
+    if (opts?.lock) row.locked = true;
+    if (opts?.drive) row.kind = "driving";
+    if (opts?.call) {
+      row.kind = "fixed";
+      row.reason = "찾근";
+    }
+    if (opts?.two) {
+      row.kind = "oneTwo";
+      row.pairId = `tw-${shift}-${course}-${tee}`;
+    }
+    rows.push(row);
+    teeSheet.push({ course, shift, teeTime: tee });
+  };
+
+  // 1부 06:07: 레이크 = 하우스만 (보고된 케이스). 베르힐 = 리무진만 (주황 띠).
+  add("1부", "VERTHILL", "06:07", "이서연", "2조", "아침A", { limo: true });
+  add("1부", "SKY", "06:07", "강보미", "1조", "강예약");
+  add("1부", "OCEAN", "06:07", "조민", "1조", "조예약");
+  add("1부", "LAKE", "06:07", "김하우", "3조", "레이크하우팀", { house: true });
+  // 같은 부 다른 시각: 하우스+리무진, 하우스만
+  add("1부", "LAKE", "06:14", "박준", "4조", "박팀", { house: true, limo: true });
+  add("1부", "SKY", "06:14", "윤지호", "2조", "윤팀", { house: true });
+  // 2부·3부 하우스 (회귀)
+  add("2부", "LAKE", "11:07", "최유진", "5조", "오후하우팀", { house: true });
+  add("2부", "VERTHILL", "11:07", "정하늘", "6조", "정팀", { house: true, limo: true });
+  add("2부", "SKY", "11:07", "한소희", "7조", "한예약", { two: true });
+  add("3부", "LAKE", "16:07", "오민재", "8조", "저녁하우팀", { house: true });
+  add("3부", "OCEAN", "16:07", "임하늘", "2조", "임팀", { house: true, call: true });
+  add("3부", "VERTHILL", "16:07", "남궁서연", "3조", "남궁예약", { house: true, lock: true });
+
+  return {
+    date,
+    status: "DRAFT",
+    assignments: rows,
+    unassignedReservations: [],
+    closedCourseReservations: [],
+    openCourses: [...COURSE_CODES],
+    caddyPool: [],
+    teeSheet,
+    sparesByShift: [
+      { shift: "1부", spare1: { caddyId: 9911, name: "김스페어", team: "1조", teamOrder: 1 }, spare2: null },
+    ],
+    confirmedAt: null,
+  };
+}

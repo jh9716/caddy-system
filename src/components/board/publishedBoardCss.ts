@@ -119,7 +119,7 @@ export const publishedBoardCss = `
     background: #fffdf6;
     box-shadow: inset 2px 0 0 #d6b37a;
   }
-  .bc-cell.assigned.limo { box-shadow: inset 0 -3px 0 #f59e0b; }
+  /* 리무진 칸 주황 하단 띠(inset bottom amber bar)는 제거. 배지 색·의미는 유지. */
   .bc-cell.assigned.drive { box-shadow: inset 3px 0 0 #7c3aed; }
   .bc-slot {
     display: flex;
@@ -253,8 +253,12 @@ export const publishedBoardCss = `
   /* PC: 새 래퍼는 레이아웃에 영향 없음. 하우스 모바일 전용 마크는 PC에서 숨김. */
   .bc-flags { display: contents; }
   .bc-mark-house-mobile { display: none; }
-  /* 하우스만 있는 Marks는 PC에서 완전히 숨김(빈 줄 방지). 팀행 하우스만 보임. */
-  .bc-marks:not(:has(:not(.bc-mark-house-mobile))) { display: none; }
+  /* 하우스만 있는 Marks는 PC에서만 숨김(빈 줄 방지, 팀행 배지 사용).
+     이 규칙을 모바일에도 적용하면, 팀행 배지를 숨긴 뒤 하우스 단독 셀의
+     배지가 통째로 사라진다 (t147 회귀, 2026-11-01 1부 06:07 레이크 형태). */
+  @media (min-width: 481px) {
+    .bc-marks:not(:has(:not(.bc-mark-house-mobile))) { display: none; }
+  }
   .pub-spare {
     display: flex;
     flex-wrap: wrap;
@@ -401,7 +405,7 @@ export const publishedBoardCss = `
       min-width: 0;
       flex: 0 0 auto;
     }
-    .bc-marks { gap: 1px; min-height: 0; }
+    .bc-marks { display: inline-flex; gap: 1px; min-height: 0; }
     .bc-badge, .bc-special { font-size: 0.54rem; padding: 0 2px; line-height: 1.2; }
     .lock-chip { font-size: 0.54rem; min-height: 12px; padding: 0 3px; margin-top: 0; }
   }
