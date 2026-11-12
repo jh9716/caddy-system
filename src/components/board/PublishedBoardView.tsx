@@ -25,6 +25,13 @@ const LINKED_KIND_TAG: Partial<Record<string, string>> = {
   fiftyFourHole: "54",
 };
 
+function caddyNameSizeClass(name: string): string {
+  const n = Array.from(name || "").length;
+  if (n >= 7) return " name-xl";
+  if (n >= 5) return " name-lg";
+  return "";
+}
+
 function Marks({ row }: { row: PublishedPlacementV1 }) {
   const special = row.kind !== "regular" && row.kind !== "specialSupport";
   if (
@@ -33,7 +40,8 @@ function Marks({ row }: { row: PublishedPlacementV1 }) {
     !row.specialSupport &&
     !special &&
     !row.limousine &&
-    !row.driving
+    !row.driving &&
+    !row.houseRequest
   ) {
     return null;
   }
@@ -42,6 +50,10 @@ function Marks({ row }: { row: PublishedPlacementV1 }) {
     : null;
   return (
     <span className="bc-marks">
+      {/* 모바일에서만 표시. PC는 팀행의 하우스를 유지(디자인 불변). 같은 houseRequest 필드. */}
+      {row.houseRequest ? (
+        <span className="bc-badge house bc-mark-house-mobile">하우스</span>
+      ) : null}
       {row.limousine ? <span className="bc-badge limo">리무진</span> : null}
       {row.driving ? <span className="bc-badge drive">드라이빙</span> : null}
       {row.twoWork ? <span className="bc-badge two">투</span> : null}
@@ -69,10 +81,18 @@ function ReadOnlySlot({ row }: { row: PublishedPlacementV1 }) {
   const vacant = isVacantPublishedPlacement(row);
   return (
     <div className="bc-slot" data-board-slot={vacant ? "vacant" : undefined}>
-      <div className="bc-team">
-        <span className="bc-team-name" title={row.teamName || "팀"}>
-          {row.teamName || "팀"}
-        </span>
+      <div className={`bc-team${row.teamName ? "" : " is-empty"}`}>
+        {row.teamName ? (
+          <span className={`bc-team-name${caddyNameSizeClass(row.teamName)}`} title={row.teamName}>
+            {row.teamName}
+          </span>
+        ) : (
+          <span className="bc-team-name bc-team-name-fallback" title="팀">
+            팀
+          </span>
+        )}
+        {/* PC 유지: 팀행 하우스·리무진. 모바일에서는 CSS로 숨기고 Marks로 통일.
+            리무진은 팀행·Marks 모두 row.limousine(동일 필드·동일 의미)이라 모바일에서만 중복 제거. */}
         {row.houseRequest ? <span className="bc-badge house">하우스</span> : null}
         {row.limousine ? <span className="bc-badge limo">리무진</span> : null}
       </div>
@@ -81,17 +101,20 @@ function ReadOnlySlot({ row }: { row: PublishedPlacementV1 }) {
           <span className="bc-vacant">미배치</span>
         ) : (
           <span
-            className="bc-name"
+            className={`bc-name${caddyNameSizeClass(row.caddyName)}`}
             title={row.caddyName}
             data-board-two-work={row.twoWork ? "1" : undefined}
+            data-name-len={Array.from(row.caddyName || "").length}
           >
             {row.caddyName}
           </span>
         )}
         {row.caddyTeam ? <span className="bc-affil">{row.caddyTeam}</span> : null}
-        <Marks row={row} />
+        <div className="bc-flags">
+          <Marks row={row} />
+          {row.locked ? <span className="lock-chip">LOCK</span> : null}
+        </div>
       </div>
-      {row.locked ? <span className="lock-chip">LOCK</span> : null}
     </div>
   );
 }

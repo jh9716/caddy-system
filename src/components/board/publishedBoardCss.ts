@@ -250,6 +250,11 @@ export const publishedBoardCss = `
     font-weight: 800;
     color: #b45309;
   }
+  /* PC: 새 래퍼는 레이아웃에 영향 없음. 하우스 모바일 전용 마크는 PC에서 숨김. */
+  .bc-flags { display: contents; }
+  .bc-mark-house-mobile { display: none; }
+  /* 하우스만 있는 Marks는 PC에서 완전히 숨김(빈 줄 방지). 팀행 하우스만 보임. */
+  .bc-marks:not(:has(:not(.bc-mark-house-mobile))) { display: none; }
   .pub-spare {
     display: flex;
     flex-wrap: wrap;
@@ -284,22 +289,118 @@ export const publishedBoardCss = `
     font-size: 0.85rem;
   }
   @media (max-width: 480px) {
-    /* 4코스 동시 표시 + 이름 우선. 행은 내용만큼만 커지고, 배지는 이름·조 아래 한 줄로 접는다. */
+    /* 4코스 동시 표시 + 셀 내부 동일 규칙: 예약자명 / 캐디명 / 조 / 배지.
+       캐디 이름은 위 슬롯이 비어도 같은 줄에서 시작(위에서부터 쌓음). */
     .ops-col-time { width: 42px; }
     .ops-col-course { width: calc((100% - 42px) / 4); }
     .ops-board-row > .bc-time { width: 42px; font-size: 0.75rem; }
     .ops-board-row > .bc-time,
-    .ops-board-row > .bc-cell { min-height: 0; }
+    .ops-board-row > .bc-cell {
+      min-height: 40px;
+      vertical-align: top;
+    }
     .ops-board-head th {
       font-size: 0.72rem;
     }
     .bh-count { font-size: 0.6rem; }
-    .bc-cell { padding: 2px 1px; overflow: visible; }
-    .bc-slot { gap: 0; }
-    .bc-name { font-size: 0.82rem; font-weight: 800; line-height: 1.15; }
-    .bc-affil { font-size: 0.6rem; line-height: 1.1; }
-    .bc-team { min-height: 0; gap: 1px; }
-    .bc-team-name { font-size: 0.58rem; line-height: 1.1; }
+    .bc-cell { padding: 2px 1px 3px; overflow: visible; }
+    /* display:contents 는 테이블 셀 높이 계산을 깨뜨려 글자가 다음 행과 겹쳤다.
+       일반 플로우(flex)로 쌓아 행이 내용만큼 커지게 한다. */
+    .bc-slot {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 1px;
+      width: 100%;
+      min-width: 0;
+      min-height: 42px;
+      height: auto;
+    }
+    .bc-caddy {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+      min-width: 0;
+      gap: 1px;
+      flex: 0 0 auto;
+    }
+    .bc-team {
+      flex-direction: column;
+      flex-wrap: nowrap;
+      width: 100%;
+      min-height: 0;
+      gap: 0;
+      flex: 0 0 auto;
+    }
+    .bc-team-name-fallback { display: none; }
+    .bc-team.is-empty {
+      min-height: 0;
+      height: 0;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      border: 0;
+    }
+    /* 팀행의 하우스·리무진은 숨기고, Marks(최하단)로 통일. 리무진은 동일 필드 중복. */
+    .bc-team .bc-badge { display: none; }
+    .bc-mark-house-mobile { display: inline-block; }
+    .bc-team-name {
+      font-size: 0.56rem;
+      line-height: 1.15;
+      font-weight: 700;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: visible;
+    }
+    .bc-team-name.name-lg,
+    .bc-team-name.name-xl {
+      font-size: 0.48rem;
+      letter-spacing: -0.03em;
+    }
+    .bc-team-name.name-xl {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+      line-height: 1.1;
+    }
+    .bc-name {
+      font-size: 0.82rem;
+      font-weight: 800;
+      line-height: 1.15;
+      white-space: nowrap;
+      max-width: 100%;
+      overflow: visible;
+      flex: 0 0 auto;
+    }
+    /* 긴 이름만 축소. 2~4글자는 그대로. */
+    .bc-name.name-lg {
+      font-size: 0.7rem;
+      letter-spacing: -0.02em;
+    }
+    .bc-name.name-xl {
+      font-size: 0.6rem;
+      letter-spacing: -0.03em;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+      line-height: 1.12;
+    }
+    .bc-affil {
+      font-size: 0.58rem;
+      line-height: 1.1;
+    }
+    .bc-flags {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 1px;
+      width: 100%;
+      min-width: 0;
+      flex: 0 0 auto;
+    }
     .bc-marks { gap: 1px; min-height: 0; }
     .bc-badge, .bc-special { font-size: 0.54rem; padding: 0 2px; line-height: 1.2; }
     .lock-chip { font-size: 0.54rem; min-height: 12px; padding: 0 3px; margin-top: 0; }
