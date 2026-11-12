@@ -310,7 +310,12 @@ section("LOCK / 특수 / 지원 / linked pair 양쪽 sheet");
     .join("\n");
   assert(!allCellText.includes("12-8"), "pairId 12-8 셀 미노출");
   assert(!allCellText.includes("sup12"), "pairId sup12 셀 미노출");
+  const raw = Buffer.from(bytes).toString("utf8");
+  const rawBin = Buffer.from(bytes).toString("binary");
+  assert(!/FFFFF59D|FFF59D/i.test(raw) && !/FFFFF59D|FFF59D/i.test(rawBin), "엑셀: 투근무 노란 채움 없음");
+  assert(/\[투/.test(allCellText), "엑셀: 투근무는 [투] 짧은 텍스트로 유지");
 }
+
 
 section("export source 안전장치 (호출/의존 금지)");
 {

@@ -341,17 +341,18 @@ console.log("[PNG] 같은 시트");
   assert(!h.includes("1부예약"), "PNG: 예약자명 없음");
 }
 
-console.log("[현장형] 투근무 노랑 · 비고 빈 열 · 하단 합계 · 초과 표시");
+console.log("[현장형] 투근무 배지 · 노란 배경 없음 · 비고 빈 열 · 하단 합계 · 초과 표시");
 {
   const rich = richMobileDraft("2026-11-17");
   const m2 = buildBoardSheetModel(rich, "2부");
   const two = m2.courses.flatMap((c) => c.slots.flatMap((s) => s.caddies.filter((x) => x.twoWork)));
   assert(two.length >= 1, "2부: 투근무 캐디 1명 이상 (1부 동일 캐디의 뒷부)");
   const h2 = html(m2);
-  assert(/bs-name two-work/.test(h2) && /data-sheet-two-work="1"/.test(h2), "인쇄: 투근무 이름 칸 two-work 클래스");
+  assert(/data-sheet-two-work="1"/.test(h2) && /data-sheet-mark="투"/.test(h2) && h2.includes(">투<"), "인쇄: 투근무는 배지 '투'로 표시");
+  assert(!/bs-name two-work/.test(h2), "인쇄: 이름에 two-work 노란 클래스 없음");
   const m1 = buildBoardSheetModel(rich, "1부");
   assert(m1.courses.every((c) => c.slots.every((s) => s.caddies.every((x) => !x.twoWork))), "1부(첫 근무): 투근무 아님");
-  assert(!/data-sheet-two-work="1"/.test(html(m1)), "1부 인쇄: 노란 이름 없음");
+  assert(!/data-sheet-two-work="1"/.test(html(m1)) && !/data-sheet-mark="투"/.test(html(m1)), "1부 인쇄: 투 배지 없음");
   // 배지·LOCK 유지
   const allH = BOARD_PRINT_SHIFTS.map((s) => html(buildBoardSheetModel(rich, s))).join("");
   for (const label of ["리무진", "하우스", "드라이빙", "투", "찾근"]) {
@@ -377,18 +378,21 @@ console.log("[현장형] 투근무 노랑 · 비고 빈 열 · 하단 합계 · 
   const css = readFileSync("src/components/board/boardSheetCss.ts", "utf8");
   assert(!/#fef3c7/i.test(css), "인쇄 CSS: 초과 강조에 #fef3c7 노랑 없음");
   assert(/overflowFg/.test(css) && /#991B1B/.test(css), "인쇄 CSS: 초과는 빨간 글자");
-  assert(/#FFF59D/.test(css), "인쇄 CSS: 투근무 노랑 #FFF59D");
-  // /board 화면: 노란 이름, 비고 열 없음, 전체 배정
+  assert(!/#FFF59D/i.test(css) && !/#fef3c7/i.test(css), "인쇄 CSS: 투근무·초과에 노란 배경 없음");
+  assert(/data-sheet-mark="투"/.test(css) || /bs-mark\[data-sheet-mark="투"\]/.test(css), "인쇄 CSS: 투 배지는 두꺼운 검정 테두리(흑백 구분)");
+  // /board 화면: 투 배지, 노란 배경 없음, 비고 열 없음, 전체 배정
   const pub = buildPublishedPayloadFromDraft(rich as unknown as DailyBoardDraftPayloadV1);
   const ph2 = renderToStaticMarkup(<PublishedBoardView payload={pub} shift={"2부" as ShiftPart} />);
   const ph1 = renderToStaticMarkup(<PublishedBoardView payload={pub} shift={"1부" as ShiftPart} />);
-  assert(/bc-name two-work/.test(ph2) && /data-board-two-work="1"/.test(ph2), "/board 2부: 투근무 이름 노랑");
-  assert(!/data-board-two-work="1"/.test(ph1), "/board 1부: 투근무 노랑 없음");
+  assert(/data-board-two-work="1"/.test(ph2) && /bc-badge two"/.test(ph2) && ph2.includes(">투<"), "/board 2부: 투 배지 표시");
+  assert(!/bc-name two-work/.test(ph2), "/board 2부: 이름 노란 클래스 없음");
+  assert(!/data-board-two-work="1"/.test(ph1), "/board 1부: 투근무 표시 없음");
   assert(!/data-sheet-remark/.test(ph2) && !/>비고</.test(ph2), "/board: 비고 열 없음");
   assert(/data-board-total-assigned=/.test(ph2) && /전체 배정/.test(ph2), "/board 하단 전체 배정 팀 수");
   assert(/pub-spare/.test(ph2) || true, "/board 스페어 영역 유지");
   const boardCss = readFileSync("src/components/board/publishedBoardCss.ts", "utf8");
-  assert(/#FFF59D/.test(boardCss) && !/#f8fafc/.test(boardCss.split(".bc-cell.assigned.two-work")[1]?.slice(0, 200) || "#f8fafc"), "/board: 투근무 이름 노랑, 칸 회색 배경 제거");
+  assert(!/#FFF59D/i.test(boardCss), "/board CSS: 투근무 노란 배경 없음");
+  assert(/\.bc-badge\.two \{ color: #334155; background: #e2e8f0; \}/.test(boardCss) || /bc-badge.two \{ color: #334155; background: #e2e8f0; \}/.test(boardCss), "/board: 기존 '투' 회색 배지 재사용");
 }
 
 console.log("[/board] Published 어댑터·개인정보");

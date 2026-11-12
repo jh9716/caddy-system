@@ -40,7 +40,7 @@ function SlotCell({ slot, includeTeamName }: { slot: BoardSheetSlot; includeTeam
         ) : (
           <div key={`${c.name}-${i}`} className="bs-slot" data-sheet-slot="assigned">
             <span
-              className={`bs-name${c.twoWork ? " two-work" : ""}`}
+              className="bs-name"
               data-sheet-two-work={c.twoWork ? "1" : undefined}
             >
               {c.name}
@@ -49,7 +49,7 @@ function SlotCell({ slot, includeTeamName }: { slot: BoardSheetSlot; includeTeam
             {c.marks.length ? (
               <span className="bs-marks">
                 {c.marks.map((m) => (
-                  <span key={m} className="bs-mark">
+                  <span key={m} className="bs-mark" data-sheet-mark={m}>
                     {m}
                   </span>
                 ))}

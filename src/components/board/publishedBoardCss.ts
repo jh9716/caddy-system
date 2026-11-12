@@ -65,7 +65,8 @@ export const publishedBoardCss = `
   .ops-board-row > .bc-time,
   .ops-board-row > .bc-cell {
     box-sizing: border-box;
-    height: 64px;
+    height: auto;
+    min-height: 0;
     vertical-align: middle;
     border: 1px solid var(--ops-board-line);
   }
@@ -86,7 +87,7 @@ export const publishedBoardCss = `
     font-size: 0.72rem;
     line-height: 1.15;
     text-align: center;
-    overflow: hidden;
+    overflow: visible;
     overflow-wrap: anywhere;
   }
   .bc-cell.empty {
@@ -113,17 +114,11 @@ export const publishedBoardCss = `
     background: #fff;
   }
   .bc-cell.assigned.special { background: #fffbeb; }
-  /* 투근무: 이름 칸만 노랑. 회색 배경은 쓰지 않음. 특수/찾근 배경과 겹치면 투 노랑이 이김(칸 배경은 흰색). */
-  .bc-cell.assigned.two-work,
-  .bc-cell.assigned.special.two-work,
-  .bc-cell.assigned.chageun.two-work {
-    background: #fff;
-  }
+  /* 투근무는 이름 배경색을 쓰지 않고 기존 '투' 배지(회색)로만 표시한다. */
   .bc-cell.assigned.chageun {
     background: #fffdf6;
     box-shadow: inset 2px 0 0 #d6b37a;
   }
-  .bc-cell.assigned.chageun.two-work { box-shadow: inset 2px 0 0 #d6b37a; }
   .bc-cell.assigned.limo { box-shadow: inset 0 -3px 0 #f59e0b; }
   .bc-cell.assigned.drive { box-shadow: inset 3px 0 0 #7c3aed; }
   .bc-slot {
@@ -149,9 +144,9 @@ export const publishedBoardCss = `
     flex-direction: row;
     flex-wrap: wrap;
     justify-content: center;
-    overflow: hidden;
+    overflow: visible;
     gap: 2px;
-    min-height: 14px;
+    min-height: 0;
   }
   .bc-team .bc-badge {
     flex: 0 0 auto;
@@ -160,7 +155,7 @@ export const publishedBoardCss = `
   .bc-name,
   .bc-affil {
     max-width: 100%;
-    overflow: hidden;
+    overflow: visible;
     text-align: center;
   }
   /* 긴 이름은 잘라내지 않고 다음 줄로 */
@@ -198,13 +193,7 @@ export const publishedBoardCss = `
     color: #0f172a;
     line-height: 1.2;
   }
-  .bc-name.two-work {
-    background: #FFF59D;
-    padding: 0 3px;
-    border-radius: 2px;
-    box-decoration-break: clone;
-    -webkit-box-decoration-break: clone;
-  }
+  /* 투근무 노란 배경은 쓰지 않음. 구분은 .bc-badge.two */
   .bc-affil {
     font-size: 0.66rem;
     font-weight: 700;
@@ -218,8 +207,8 @@ export const publishedBoardCss = `
     flex-wrap: wrap;
     gap: 2px;
     max-width: 100%;
-    overflow: hidden;
-    min-height: 14px;
+    overflow: visible;
+    min-height: 0;
   }
   .bc-badge {
     display: inline-block;
@@ -295,19 +284,24 @@ export const publishedBoardCss = `
     font-size: 0.85rem;
   }
   @media (max-width: 480px) {
-    /* 4코스 동시 표시 유지 + 가독성: 시각 열을 줄이고 이름·시각 글자를 키움 */
+    /* 4코스 동시 표시 + 이름 우선. 행은 내용만큼만 커지고, 배지는 이름·조 아래 한 줄로 접는다. */
     .ops-col-time { width: 42px; }
     .ops-col-course { width: calc((100% - 42px) / 4); }
     .ops-board-row > .bc-time { width: 42px; font-size: 0.75rem; }
+    .ops-board-row > .bc-time,
+    .ops-board-row > .bc-cell { min-height: 0; }
     .ops-board-head th {
       font-size: 0.72rem;
     }
     .bh-count { font-size: 0.6rem; }
-    .bc-cell { padding: 2px 1px; }
-    .bc-name { font-size: 0.8rem; }
-    .bc-affil { font-size: 0.62rem; }
-    .bc-badge, .bc-special { font-size: 0.58rem; padding: 0 2px; }
-    .lock-chip { font-size: 0.58rem; }
-    .bc-team-name { font-size: 0.6rem; }
+    .bc-cell { padding: 2px 1px; overflow: visible; }
+    .bc-slot { gap: 0; }
+    .bc-name { font-size: 0.82rem; font-weight: 800; line-height: 1.15; }
+    .bc-affil { font-size: 0.6rem; line-height: 1.1; }
+    .bc-team { min-height: 0; gap: 1px; }
+    .bc-team-name { font-size: 0.58rem; line-height: 1.1; }
+    .bc-marks { gap: 1px; min-height: 0; }
+    .bc-badge, .bc-special { font-size: 0.54rem; padding: 0 2px; line-height: 1.2; }
+    .lock-chip { font-size: 0.54rem; min-height: 12px; padding: 0 3px; margin-top: 0; }
   }
 `;

@@ -57,7 +57,7 @@ export const BOARD_XLSX_HEADER_ROW = 4;
 export const BOARD_XLSX_SUBHEADER_ROW = 5;
 export const BOARD_XLSX_DATA_START_ROW = 6;
 export const BOARD_XLSX_COLUMN_COUNT = 1 + COURSE_CODES.length * BOARD_SHEET_COLS_PER_COURSE;
-export const BOARD_XLSX_TWO_WORK_FILL = "FFFFF59D";
+/** 투근무는 노란 채움 없이 칸 문자열의 [투] 표기로만 구분한다 (흑백·편집 가능). */
 
 const LINKED_KIND_TAG: Partial<Record<AssignmentKind, string>> = {
   oneTwo: "1·2",
@@ -310,8 +310,7 @@ export async function buildBoardExportWorkbook(
  */
 export function applyBoardXlsxPrintSetup(
   XLSX: typeof import("xlsx"),
-  bytes: Uint8Array,
-  twoWorkRefsBySheet?: ReadonlyArray<readonly string[]>
+  bytes: Uint8Array
 ): Uint8Array {
   try {
     const mod = XLSX as unknown as { CFB?: CfbApi; default?: { CFB?: CfbApi } };
@@ -355,13 +354,10 @@ export function applyBoardXlsxPrintSetup(
       changed += 1;
     });
     if (!changed) return bytes;
-    // 칸 서식(테두리·굵게·머리글 음영·투근무 노랑)은 styles.xml 주입이 성공했을 때만 적용
+    // 칸 서식(테두리·굵게·머리글 음영·초과 표시)은 styles.xml 주입이 성공했을 때만 적용
     for (const [i, xml] of sheetXml) {
       const entry = zip.FileIndex[i];
-      const path = zip.FullPaths[i] || "";
-      const sheetNo = Number(/sheet(\d+)\.xml$/.exec(path)?.[1] || 0);
-      const twoRefs = twoWorkRefsBySheet?.[sheetNo - 1] || [];
-      entry.content = enc.encode(stylesOk ? styleBoardSheetCells(xml, twoRefs) : xml);
+      entry.content = enc.encode(stylesOk ? styleBoardSheetCells(xml) : xml);
       entry.size = (entry.content as Uint8Array).length;
     }
     return toUint8Array(CFB.write(zip, { fileType: "zip", type: "array", compression: true }));
@@ -371,7 +367,7 @@ export function applyBoardXlsxPrintSetup(
 }
 
 /** 공통 시트 서식 인덱스 (styles.xml cellXfs 뒤에 추가되는 순서, 0은 기본) */
-const XF = { title: 1, info: 2, head: 3, no: 4, time: 5, caddy: 6, remark: 7, twoWork: 8, overflowNo: 9 } as const;
+const XF = { title: 1, info: 2, head: 3, no: 4, time: 5, caddy: 6, remark: 7, overflowNo: 8 } as const;
 
 function injectBoardXlsxStyles(xml: string): string | null {
   const fonts = /<fonts count="(\d+)">([\s\S]*?)<\/fonts>/.exec(xml);
@@ -386,8 +382,7 @@ function injectBoardXlsxStyles(xml: string): string | null {
   const fontTitle = f0 + 1;
   const fontSmall = f0 + 2;
   const fillHead = fl0;
-  const fillTwo = fl0 + 1;
-  const fillOver = fl0 + 2;
+  const fillOver = fl0 + 1;
   const borderThin = b0;
   const thin = '<left style="thin"><color rgb="FF000000"/></left><right style="thin"><color rgb="FF000000"/></right><top style="thin"><color rgb="FF000000"/></top><bottom style="thin"><color rgb="FF000000"/></bottom><diagonal/>';
   const center = '<alignment horizontal="center" vertical="center" wrapText="1"/>';
@@ -403,25 +398,22 @@ function injectBoardXlsxStyles(xml: string): string | null {
     `<xf numFmtId="0" fontId="${fontBold}" fillId="0" borderId="${borderThin}" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1">${center}</xf>`,
     `<xf numFmtId="0" fontId="${fontBold}" fillId="0" borderId="${borderThin}" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1">${left}</xf>`,
     `<xf numFmtId="0" fontId="${fontSmall}" fillId="0" borderId="${borderThin}" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1" applyProtection="1">${left}${unlocked}</xf>`,
-    `<xf numFmtId="0" fontId="${fontBold}" fillId="${fillTwo}" borderId="${borderThin}" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">${left}</xf>`,
     `<xf numFmtId="0" fontId="${fontOver}" fillId="${fillOver}" borderId="${borderThin}" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">${center}</xf>`,
   ];
   return xml
     .replace(fonts[0], `<fonts count="${f0 + 4}">${fonts[2]}<font><b/><sz val="12"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="16"/><name val="Calibri"/><family val="2"/></font><font><sz val="10"/><color rgb="FF333333"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="10"/><color rgb="FF991B1B"/><name val="Calibri"/><family val="2"/></font></fonts>`)
-    .replace(fills[0], `<fills count="${fl0 + 3}">${fills[2]}<fill><patternFill patternType="solid"><fgColor rgb="FFE5E7EB"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="${BOARD_XLSX_TWO_WORK_FILL}"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF4F4F5"/><bgColor indexed="64"/></patternFill></fill></fills>`)
+    .replace(fills[0], `<fills count="${fl0 + 2}">${fills[2]}<fill><patternFill patternType="solid"><fgColor rgb="FFE5E7EB"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF4F4F5"/><bgColor indexed="64"/></patternFill></fill></fills>`)
     .replace(borders[0], `<borders count="${b0 + 1}">${borders[2]}<border>${thin}</border></borders>`)
     .replace(xfs[0], `<cellXfs count="${1 + newXfs.length}">${xfs[2]}${newXfs.join("")}</cellXfs>`);
 }
 
-function styleBoardSheetCells(xml: string, twoWorkRefs: readonly string[] = []): string {
+function styleBoardSheetCells(xml: string): string {
   const head1 = BOARD_XLSX_HEADER_ROW + 1;
   const head2 = BOARD_XLSX_SUBHEADER_ROW + 1;
   const data = BOARD_XLSX_DATA_START_ROW + 1;
-  const two = new Set(twoWorkRefs);
   const overflowFrom = data + 21; // 22번째 데이터 행부터 (기본 21행 다음)
   return xml.replace(/<c r="([A-Z]+)(\d+)"(?![^>]*\ss=)/g, (m, col: string, rowStr: string) => {
     const r = Number(rowStr);
-    const ref = `${col}${rowStr}`;
     let xf: number;
     if (r === 1) xf = XF.title;
     else if (r < head1) xf = XF.info;
@@ -431,7 +423,7 @@ function styleBoardSheetCells(xml: string, twoWorkRefs: readonly string[] = []):
       if (c === 0) xf = r >= overflowFrom ? XF.overflowNo : XF.no;
       else {
         const kind = (c - 1) % BOARD_SHEET_COLS_PER_COURSE;
-        xf = kind === 0 ? XF.time : kind === 1 ? (two.has(ref) ? XF.twoWork : XF.caddy) : XF.remark;
+        xf = kind === 0 ? XF.time : kind === 1 ? XF.caddy : XF.remark;
       }
     } else return m;
     return `<c r="${col}${rowStr}" s="${xf}"`;
@@ -467,16 +459,13 @@ export async function writeBoardExportXlsxBytes(
 ): Promise<Uint8Array> {
   const XLSX = await loadBoardExportXlsx();
   const wb = await buildBoardExportWorkbook(draft);
-  const twoWorkRefsBySheet = BOARD_EXPORT_SHIFTS.map((shift) =>
-    boardSheetTwoWorkCaddyRefs(buildBoardSheetModel(draft, shift))
-  );
   const out = XLSX.write(wb, {
     bookType: "xlsx",
     type: "array",
     compression: true,
     cellDates: false,
   });
-  return applyBoardXlsxPrintSetup(XLSX, toUint8Array(out), twoWorkRefsBySheet);
+  return applyBoardXlsxPrintSetup(XLSX, toUint8Array(out));
 }
 
 export type ParsedBoardExcelRow = {

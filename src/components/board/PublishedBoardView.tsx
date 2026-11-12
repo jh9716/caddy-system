@@ -81,7 +81,7 @@ function ReadOnlySlot({ row }: { row: PublishedPlacementV1 }) {
           <span className="bc-vacant">미배치</span>
         ) : (
           <span
-            className={`bc-name${row.twoWork ? " two-work" : ""}`}
+            className="bc-name"
             title={row.caddyName}
             data-board-two-work={row.twoWork ? "1" : undefined}
           >

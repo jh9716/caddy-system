@@ -2,7 +2,8 @@
  * 배치표 공통 시트 디자인 토큰 + CSS.
  * /board 화면 · PNG · A4 인쇄가 같은 CSS 를 쓴다. 단위는 mm/pt (A4 가로 인쇄 기준, 화면에서는 96dpi 환산).
  * A4 가로 인쇄 가능 영역 281mm × 193mm (여백 8/8/9mm) 안에 21행이 한 장에 들어가도록 설계.
- * 투근무 노랑(#FFF59D)과 겹치지 않게, 21 초과 행은 노랑이 아닌 빨간 글자·테두리로 표시한다.
+ * 투근무는 색이 아닌 테두리 배지(「투」)로 표시해 흑백 인쇄에서도 구분된다.
+ * 21 초과 행은 빨간 글자·테두리로 표시한다.
  */
 export const BOARD_SHEET_TOKENS = {
   /** 시트 폭 = A4 가로 297mm - 좌우 여백 16mm */
@@ -20,10 +21,8 @@ export const BOARD_SHEET_TOKENS = {
   border: "0.6pt solid #333",
   headBg: "#e5e7eb",
   closedBg: "#d1d5db",
-  /** 투근무 이름 칸 (현장 시안 #FFF59D) */
-  twoWorkBg: "#FFF59D",
   footerBg: "#16325C",
-  /** 21 초과 — 노랑을 쓰지 않음 (투근무 노랑과 구분) */
+  /** 21 초과 행 표시 (빨간 글자·회색 배경, 색만으로 구분하지 않음) */
   overflowFg: "#991B1B",
   overflowBg: "#F4F4F5",
 } as const;
@@ -78,16 +77,11 @@ export const boardSheetCss = `
 .bs-slot { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 1.1mm; row-gap: 0.2mm; }
 .bs-slot + .bs-slot { margin-top: 0.4mm; padding-top: 0.4mm; border-top: 0.4pt dashed #777; }
 .bs-name { font-size: ${T.fontNamePt}pt; font-weight: 800; white-space: nowrap; }
-.bs-name.two-work {
-  background: ${T.twoWorkBg};
-  padding: 0 0.8mm;
-  border-radius: 0.6mm;
-  -webkit-print-color-adjust: exact;
-  print-color-adjust: exact;
-}
 .bs-affil { font-size: ${T.fontAffilPt}pt; color: #333; white-space: nowrap; }
 .bs-marks { display: inline-flex; flex-wrap: nowrap; flex: 0 0 auto; gap: 0.6mm; }
-.bs-mark { font-size: ${T.fontMarkPt}pt; font-weight: 700; border: 0.6pt solid #000; border-radius: 1mm; padding: 0 0.6mm; white-space: nowrap; }
+/* 흑백 인쇄: 색에 의존하지 않고 검정 테두리+글자로 구분 */
+.bs-mark { font-size: ${T.fontMarkPt}pt; font-weight: 700; border: 0.7pt solid #000; border-radius: 1mm; padding: 0 0.6mm; white-space: nowrap; background: #fff; color: #000; }
+.bs-mark[data-sheet-mark="투"] { font-weight: 900; border-width: 1.1pt; }
 .bs-vacant { font-size: 9pt; font-weight: 800; border: 0.8pt dashed #000; padding: 0 1.1mm; }
 .bs-team { flex-basis: 100%; font-size: 7.5pt; color: #333; }
 .bs-footer-bar {
