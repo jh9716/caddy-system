@@ -2,9 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LazyBoardImageExportMenu } from "@/components/board/LazyBoardImageExportMenu";
+import { LazyBoardPrintButton } from "@/components/board/LazyBoardPrintButton";
 import PublishedBoardView from "@/components/board/PublishedBoardView";
 import BoardComments from "./BoardComments";
 import { assignmentDraftFromPublishedPayload } from "@/lib/assignmentBoardExport";
+import {
+  PUBLISHED_BOARD_PRINT_HINT,
+  publishedBoardPrintDraft,
+} from "@/lib/publishedBoardPrint";
 import {
   addDaysYmd,
   formatPublishedAt,
@@ -69,6 +74,12 @@ export default function PublishedBoardPage() {
         ? assignmentDraftFromPublishedPayload(published.payload)
         : null,
     [published]
+  );
+
+  // 인쇄: 확정(Published) 데이터 + 조회 완료 + 화면 날짜 == 데이터 날짜 일 때만
+  const printDraft = useMemo(
+    () => publishedBoardPrintDraft({ selectedDate: date, loading, published }),
+    [date, loading, published]
   );
 
   const today = useMemo(() => todayYmd(), []);
@@ -230,9 +241,21 @@ export default function PublishedBoardPage() {
             <p className="pub-meta">
               {published.date} · {formatPublishedAt(published.publishedAt)} 확정
             </p>
-            {exportDraft && !staleBoard ? (
-              <LazyBoardImageExportMenu draft={exportDraft} onNotice={setNotice} />
-            ) : null}
+            <div className="pub-tool-btns">
+              {exportDraft && !staleBoard ? (
+                <LazyBoardImageExportMenu draft={exportDraft} onNotice={setNotice} />
+              ) : null}
+              {printDraft && !staleBoard ? (
+                <LazyBoardPrintButton
+                  key={printDraft.date}
+                  draft={printDraft}
+                  shift={shift}
+                  onNotice={setNotice}
+                  allowTeamName={false}
+                  hint={PUBLISHED_BOARD_PRINT_HINT}
+                />
+              ) : null}
+            </div>
           </div>
           {notice && !staleBoard ? <p className="pub-notice">{notice}</p> : null}
           <PublishedBoardView payload={published.payload} shift={shift} />
@@ -305,7 +328,14 @@ export default function PublishedBoardPage() {
           justify-content: space-between;
           gap: 8px;
         }
+        .pub-tool-btns {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex: 0 0 auto;
+        }
         .pub-notice { color: #334155; }
+        .pub-page > * { min-width: 0; }
         .pub-skel { min-height: 240px; }
       `}</style>
     </div>

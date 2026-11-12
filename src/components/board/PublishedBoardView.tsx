@@ -7,6 +7,8 @@ import type {
 } from "@/lib/dailyBoardPublished";
 import {
   buildPublishedShiftBoard,
+  countPublishedCourseTeams,
+  isVacantPublishedPlacement,
 } from "@/lib/publishedBoardView";
 import {
   COURSE_CODES,
@@ -15,6 +17,14 @@ import {
 } from "@/lib/reservationParser";
 import { publishedBoardCss } from "@/components/board/publishedBoardCss";
 import { supportBoardBadgeLabels } from "@/lib/dailySpecialSupport";
+/** 연속근무 종류 표시. 인쇄·이미지·엑셀(boardPrintMarks)과 같은 표기. 그 외 특수는 기존 S */
+const LINKED_KIND_TAG: Partial<Record<string, string>> = {
+  oneTwo: "1·2",
+  two: "2",
+  oneThree: "1·3",
+  fiftyFourHole: "54",
+};
+
 function Marks({ row }: { row: PublishedPlacementV1 }) {
   const special = row.kind !== "regular" && row.kind !== "specialSupport";
   if (
@@ -45,6 +55,8 @@ function Marks({ row }: { row: PublishedPlacementV1 }) {
         <span className="bc-badge call">찾근</span>
       ) : row.kind === "twoThree" ? (
         <span className="bc-badge two-three">2·3</span>
+      ) : special && !row.driving && LINKED_KIND_TAG[row.kind] ? (
+        <span className="bc-badge linked">{LINKED_KIND_TAG[row.kind]}</span>
       ) : special && !row.driving ? (
         <span className="bc-special">S</span>
       ) : null}
@@ -53,8 +65,10 @@ function Marks({ row }: { row: PublishedPlacementV1 }) {
 }
 
 function ReadOnlySlot({ row }: { row: PublishedPlacementV1 }) {
+  // 예약 칸은 있으나 캐디 없음 → 기존 "이름없음" 대신 인쇄·엑셀과 같은 "미배치". 배지·LOCK 은 그대로.
+  const vacant = isVacantPublishedPlacement(row);
   return (
-    <div className="bc-slot">
+    <div className="bc-slot" data-board-slot={vacant ? "vacant" : undefined}>
       <div className="bc-team">
         <span className="bc-team-name" title={row.teamName || "팀"}>
           {row.teamName || "팀"}
@@ -63,9 +77,13 @@ function ReadOnlySlot({ row }: { row: PublishedPlacementV1 }) {
         {row.limousine ? <span className="bc-badge limo">리무진</span> : null}
       </div>
       <div className="bc-caddy">
-        <span className="bc-name" title={row.caddyName}>
-          {row.caddyName}
-        </span>
+        {vacant ? (
+          <span className="bc-vacant">미배치</span>
+        ) : (
+          <span className="bc-name" title={row.caddyName}>
+            {row.caddyName}
+          </span>
+        )}
         {row.caddyTeam ? <span className="bc-affil">{row.caddyTeam}</span> : null}
         <Marks row={row} />
       </div>
@@ -98,7 +116,9 @@ export default function PublishedBoardView({
   payload: DailyBoardPublishedPayloadV1;
   shift: ShiftPart;
 }) {
-  const board = buildPublishedShiftBoard(payload, shift);
+  // 시간축 = 운영 티시트 ∪ 확정 배정 시각. 계산으로 만든 사이 시각은 넣지 않는다.
+  const board = buildPublishedShiftBoard(payload, shift, { fillInterior: false });
+  const counts = countPublishedCourseTeams(board);
   const spare =
     payload.sparesByShift.find((s) => s.shift === shift) || null;
   const open = new Set(payload.openCourses);
@@ -126,15 +146,26 @@ export default function PublishedBoardView({
                     key={code}
                     className={`bh-course${open.has(code) ? "" : " closed"}`}
                     scope="col"
+                    data-board-course-head={code}
                   >
-                    {COURSE_LABELS[code]}
+                    <span className="bh-name">{COURSE_LABELS[code]}</span>
+                    <span
+                      className={`bh-count${counts[code].teams > 21 ? " over" : ""}`}
+                      data-board-course-teams={open.has(code) ? counts[code].teams : undefined}
+                    >
+                      {open.has(code)
+                        ? `배정 ${counts[code].teams}팀${
+                            counts[code].vacant ? ` · 미배치 ${counts[code].vacant}` : ""
+                          }`
+                        : "휴장"}
+                    </span>
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {board.map((tr) => (
-                <tr key={tr.teeTime} className="ops-board-row">
+                <tr key={tr.teeTime} className="ops-board-row" data-board-time={tr.teeTime}>
                   <th className="bc-time" scope="row">
                     {tr.teeTime || "—"}
                   </th>
@@ -142,8 +173,8 @@ export default function PublishedBoardView({
                     const cell = tr.cells[code];
                     if (cell.kind === "closed") {
                       return (
-                        <td key={code} className="bc-cell closed">
-                          <span className="bc-closed">닫힘</span>
+                        <td key={code} className="bc-cell closed" data-board-cell="closed">
+                          <span className="bc-closed">휴장</span>
                         </td>
                       );
                     }
@@ -164,6 +195,8 @@ export default function PublishedBoardView({
                     return (
                       <td
                         key={code}
+                        data-board-cell="assigned"
+                        data-board-course={code}
                         className={`bc-cell assigned${special ? " special" : ""}${
                           two ? " two-work" : ""
                         }${chageun ? " chageun" : ""}${limo ? " limo" : ""}${

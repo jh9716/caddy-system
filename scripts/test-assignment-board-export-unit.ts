@@ -309,10 +309,10 @@ section("export가 Draft/DB write를 발생시키지 않음");
   assert(BOARD_EXPORT_SHIFTS.join(",") === "1부,2부,3부", "3부 메뉴");
 }
 
-section("모바일 폭에서 이미지 생성 가능 (고정 720 export 폭)");
+section("모바일 폭에서 이미지 생성 가능 (고정 A4 가로 1123 export 폭 — 공통 시트, 의도된 변경)");
 {
   const png = readFileSync(join(process.cwd(), "src/lib/assignmentBoardExportPng.ts"), "utf8");
-  assert(/BOARD_EXPORT_WIDTH_PX = 720/.test(png), "viewport가 아닌 고정 720폭");
+  assert(/BOARD_EXPORT_WIDTH_PX = 1123/.test(png), "viewport가 아닌 고정 1123폭 (A4 가로, 기존 720 → 공통 시트로 의도 변경)");
   assert(/BOARD_EXPORT_PIXEL_RATIO = 2/.test(png), "scale 2");
   assert(/left:-10000px/.test(png), "offscreen DOM");
   assert(isAndroidUserAgent("Mozilla/5.0 (Linux; Android 14; Pixel)") === true, "Android UA");

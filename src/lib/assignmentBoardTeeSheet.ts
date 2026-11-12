@@ -127,6 +127,11 @@ export function collectShiftBoardTeeTimes(input: {
   shift: ShiftPart;
   teeSheet?: readonly CourseTeeSlot[] | null;
   reservations?: readonly TeeTimeSourceReservation[] | null;
+  /**
+   * false: 운영 티시트 ∪ 예약 시각만 (계산으로 만든 사이 시각 없음). /board 표시용.
+   * 기본 true: 기존 동작 (코스별 관측 간격으로 내부 공석 보간).
+   */
+  fillInterior?: boolean;
 }): string[] {
   const fromSheet = (input.teeSheet || []).filter(
     (slot) => slot.shift === input.shift && isBoardTeeTime(slot.teeTime)
@@ -142,7 +147,8 @@ export function collectShiftBoardTeeTimes(input: {
   const union = new Set<string>();
   for (const times of byCourse.values()) {
     // 티시트가 있어도 관측 간격의 내부 공석만 채운다. 전역 7분 격자/앞뒤 연장은 하지 않는다.
-    for (const time of fillInteriorTeeTimes([...times])) union.add(time);
+    const list = input.fillInterior === false ? [...times] : fillInteriorTeeTimes([...times]);
+    for (const time of list) union.add(time);
   }
   return [...union].sort((a, b) => a.localeCompare(b));
 }

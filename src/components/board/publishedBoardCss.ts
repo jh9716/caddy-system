@@ -30,8 +30,8 @@ export const publishedBoardCss = `
   .ops-col-course { width: calc((100% - 52px) / 4); }
   .ops-board-head th {
     box-sizing: border-box;
-    height: 32px;
-    padding: 4px 2px;
+    height: 40px;
+    padding: 3px 2px;
     background: #0f172a;
     color: #fff;
     border: 1px solid #334155;
@@ -43,7 +43,24 @@ export const publishedBoardCss = `
   }
   .ops-board-head .bh-course.closed {
     color: #94a3b8;
+  }
+  .ops-board-head .bh-course.closed .bh-name {
     text-decoration: line-through;
+  }
+  .bh-name {
+    display: block;
+    line-height: 1.2;
+  }
+  .bh-count {
+    display: block;
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: #cbd5e1;
+    line-height: 1.2;
+    white-space: normal;
+  }
+  .bh-count.over {
+    color: #fca5a5;
   }
   .ops-board-row > .bc-time,
   .ops-board-row > .bc-cell {
@@ -54,7 +71,7 @@ export const publishedBoardCss = `
   }
   .ops-board-row > .bc-time {
     width: 52px;
-    font-size: 0.68rem;
+    font-size: 0.8rem;
     font-weight: 800;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -70,6 +87,7 @@ export const publishedBoardCss = `
     line-height: 1.15;
     text-align: center;
     overflow: hidden;
+    overflow-wrap: anywhere;
   }
   .bc-cell.empty {
     background: #fff;
@@ -126,7 +144,7 @@ export const publishedBoardCss = `
   }
   .bc-team {
     flex-direction: row;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     justify-content: center;
     overflow: hidden;
     gap: 2px;
@@ -140,12 +158,20 @@ export const publishedBoardCss = `
   .bc-affil {
     max-width: 100%;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
     text-align: center;
   }
+  /* 긴 이름은 잘라내지 않고 다음 줄로 */
+  .bc-team-name,
+  .bc-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: keep-all;
+  }
+  .bc-affil {
+    white-space: nowrap;
+  }
   .bc-team-name {
-    font-size: 0.55rem;
+    font-size: 0.68rem;
     font-weight: 700;
     color: #475569;
     flex: 0 1 auto;
@@ -153,7 +179,7 @@ export const publishedBoardCss = `
     line-height: 1.2;
   }
   .lock-chip {
-    font-size: 0.52rem;
+    font-size: 0.6rem;
     padding: 0 4px;
     min-height: 14px;
     line-height: 1.2;
@@ -165,12 +191,12 @@ export const publishedBoardCss = `
   }
   .bc-name {
     font-weight: 800;
-    font-size: 0.72rem;
+    font-size: 0.88rem;
     color: #0f172a;
     line-height: 1.2;
   }
   .bc-affil {
-    font-size: 0.52rem;
+    font-size: 0.66rem;
     font-weight: 700;
     color: #64748b;
     line-height: 1.15;
@@ -179,15 +205,15 @@ export const publishedBoardCss = `
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 2px;
     max-width: 100%;
     overflow: hidden;
-    height: 14px;
+    min-height: 14px;
   }
   .bc-badge {
     display: inline-block;
-    font-size: 0.52rem;
+    font-size: 0.62rem;
     font-weight: 800;
     line-height: 1.15;
     padding: 0 4px;
@@ -210,8 +236,18 @@ export const publishedBoardCss = `
   }
   .bc-badge.drive { color: #fff; background: #7c3aed; }
   .bc-badge.two-three { color: #0f766e; background: #ccfbf1; }
+  .bc-badge.linked { color: #0f766e; background: #ccfbf1; }
+  .bc-vacant {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 800;
+    color: #0f172a;
+    border: 1px dashed #0f172a;
+    border-radius: 4px;
+    padding: 0 3px;
+  }
   .bc-special {
-    font-size: 0.52rem;
+    font-size: 0.62rem;
     font-weight: 800;
     color: #b45309;
   }
@@ -234,10 +270,19 @@ export const publishedBoardCss = `
     font-size: 0.85rem;
   }
   @media (max-width: 480px) {
+    /* 4코스 동시 표시 유지 + 가독성: 시각 열을 줄이고 이름·시각 글자를 키움 */
+    .ops-col-time { width: 42px; }
+    .ops-col-course { width: calc((100% - 42px) / 4); }
+    .ops-board-row > .bc-time { width: 42px; font-size: 0.75rem; }
     .ops-board-head th {
-      font-size: 0.62rem;
+      font-size: 0.72rem;
     }
-    .bc-name { font-size: 0.68rem; }
-    .bc-team-name { font-size: 0.5rem; }
+    .bh-count { font-size: 0.6rem; }
+    .bc-cell { padding: 2px 1px; }
+    .bc-name { font-size: 0.8rem; }
+    .bc-affil { font-size: 0.62rem; }
+    .bc-badge, .bc-special { font-size: 0.58rem; padding: 0 2px; }
+    .lock-chip { font-size: 0.58rem; }
+    .bc-team-name { font-size: 0.6rem; }
   }
 `;
