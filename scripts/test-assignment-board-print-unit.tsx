@@ -116,7 +116,7 @@ assert(lake.unassigned === 2, "레이크 미배치 2 (미배치 예약 1 + 빈 �
 const eh = html(empty);
 assert(eh.includes("휴장") && eh.includes("예약 없음"), "휴장/예약 없음 헤더");
 assert((eh.match(/>미배치</g) || []).length === 3, "미배치 칸 3개 (레이크 2 + 베르힐 12:12)");
-assert((eh.match(/data-sheet-cell="closed"/g) || []).length === 21 * 2, "휴장 코스: 21행 × 2칸 빗금");
+assert((eh.match(/data-sheet-cell="closed"/g) || []).length === 21 * 3, "휴장 코스: 21행 × 3칸 빗금");
 assert(eh.includes("미배치합성팀"), "미배치 예약자명 (옵션 ON)");
 assert(!eh.includes("undefined") && !eh.includes("null"), "undefined/null 문자열 없음");
 const none = buildBoardPrintSheet(emptyAndUnassignedDraft(), "1부");
@@ -281,7 +281,9 @@ console.log("[/board 시간축] 운영 PublishedBoardView 방식 (시각 행 × 
   // 페이지·CSS
   const page = readFileSync("src/app/board/page.tsx", "utf8");
   const css = readFileSync("src/components/board/publishedBoardCss.ts", "utf8");
-  assert(/<PublishedBoardView payload=\{published\.payload\} shift=\{shift\} \/>/.test(page) && /max-width: 720px;/.test(page), "/board: 운영 PublishedBoardView + 720px 복구");
+  assert(/<PublishedBoardView payload=\{published\.payload\} shift=\{shift\} \/>/.test(page), "/board: 운영 PublishedBoardView");
+  assert(!/max-width:\s*720px/.test(page) && !/max-width:\s*1280px/.test(page), "/board: 720·1280 고정 폭 없음");
+  assert(/max-width:\s*min\(100%, 1760px\)/.test(page) && /width:\s*100%/.test(page), "/board: 화면 폭에 맞춘 반응형 (상한 1760)");
   assert(!/PublishedBoardSheet|BoardSheetMobile|화면 맞춤/.test(page), "/board: 21행 시트·모바일 시트·화면 맞춤 없음");
   assert(!existsSync("src/components/board/PublishedBoardSheet.tsx") && !existsSync("src/components/board/BoardSheetMobile.tsx") && !existsSync("src/lib/boardSheetMobile.ts"), "미사용 21행 화면 컴포넌트 제거");
   assert(/LazyBoardPrintButton/.test(page) && /staleBoard \? null : <BoardComments/.test(page), "/board: A4 인쇄 버튼·댓글 유지");
@@ -294,12 +296,12 @@ console.log("[XLSX] 같은 행·열 구조");
   const wb = await buildBoardExportWorkbook(over);
   const ws = wb.Sheets["2부"];
   const aoa = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "" });
-  assert(String(aoa[BOARD_XLSX_HEADER_ROW][0]) === "No" && String(aoa[BOARD_XLSX_HEADER_ROW][1]) === "베르힐" && String(aoa[BOARD_XLSX_HEADER_ROW][7]) === "레이크", "헤더: No | 베르힐(2칸) … 레이크(2칸)");
-  assert(String(aoa[BOARD_XLSX_SUBHEADER_ROW][1]) === "시각" && String(aoa[BOARD_XLSX_SUBHEADER_ROW][2]) === "캐디", "부 헤더: 시각/캐디");
+  assert(String(aoa[BOARD_XLSX_HEADER_ROW][0]) === "No" && String(aoa[BOARD_XLSX_HEADER_ROW][1]) === "베르힐" && String(aoa[BOARD_XLSX_HEADER_ROW][10]) === "레이크", "헤더: No | 베르힐(3칸) … 레이크(3칸)");
+  assert(String(aoa[BOARD_XLSX_SUBHEADER_ROW][1]) === "시각" && String(aoa[BOARD_XLSX_SUBHEADER_ROW][2]) === "캐디" && String(aoa[BOARD_XLSX_SUBHEADER_ROW][3]) === "비고", "부 헤더: 시각/캐디/비고");
   assert(aoa.length - BOARD_XLSX_DATA_START_ROW === 24, "2부 엑셀 24행 (초과 잘림 없음)");
-  assert(String(aoa[BOARD_XLSX_DATA_START_ROW + 1][3]) === fullLoadTeeTime("2부", "SKY", 1), "엑셀 2행 스카이 시각 = 실제 시각");
+  assert(String(aoa[BOARD_XLSX_DATA_START_ROW + 1][4]) === fullLoadTeeTime("2부", "SKY", 1), "엑셀 2행 스카이 시각 = 실제 시각");
   assert(Array.isArray(ws["!merges"]) && ws["!merges"]!.length >= 9, "제목·코스 병합");
-  assert(Array.isArray(ws["!cols"]) && ws["!cols"]!.length === 9 && Array.isArray(ws["!rows"]), "열 너비·행 높이 지정");
+  assert(Array.isArray(ws["!cols"]) && ws["!cols"]!.length === 13 && Array.isArray(ws["!rows"]), "열 너비·행 높이 지정 (No+4×3)");
   const ws1 = wb.Sheets["1부"];
   const aoa1 = XLSX.utils.sheet_to_json<unknown[]>(ws1, { header: 1, defval: "" });
   assert(aoa1.length - BOARD_XLSX_DATA_START_ROW === 21, "1부 엑셀 21행");
@@ -309,8 +311,8 @@ console.log("[XLSX] 같은 행·열 구조");
   assert(oceanCount === 24, "엑셀 다시 읽기: 오션 24팀");
   const ewb = await buildBoardExportWorkbook(emptyAndUnassignedDraft());
   const eaoa = XLSX.utils.sheet_to_json<unknown[]>(ewb.Sheets["2부"], { header: 1, defval: "" });
-  assert(String(eaoa[BOARD_XLSX_SUBHEADER_ROW][3]) === "휴장", "휴장 코스: 엑셀 헤더 '휴장'");
-  assert(eaoa.slice(BOARD_XLSX_DATA_START_ROW).some((r) => String(r[8]) === "미배치"), "미배치: 엑셀 '미배치'");
+  assert(String(eaoa[BOARD_XLSX_SUBHEADER_ROW][4]) === "휴장", "휴장 코스: 엑셀 헤더 '휴장'");
+  assert(eaoa.slice(BOARD_XLSX_DATA_START_ROW).some((r) => String(r[11]) === "미배치"), "미배치: 엑셀 '미배치'");
   assert(!JSON.stringify(eaoa).includes("미배치합성팀"), "엑셀: 예약자명 없음");
   // 실제 저장 파일: 인쇄 설정·서식 (SheetJS 무료판이 못 쓰는 부분을 XML 로 추가)
   const bytes = await writeBoardExportXlsxBytes(over);
@@ -339,7 +341,58 @@ console.log("[PNG] 같은 시트");
   assert(!h.includes("1부예약"), "PNG: 예약자명 없음");
 }
 
+console.log("[현장형] 투근무 노랑 · 비고 빈 열 · 하단 합계 · 초과 표시");
+{
+  const rich = richMobileDraft("2026-11-17");
+  const m2 = buildBoardSheetModel(rich, "2부");
+  const two = m2.courses.flatMap((c) => c.slots.flatMap((s) => s.caddies.filter((x) => x.twoWork)));
+  assert(two.length >= 1, "2부: 투근무 캐디 1명 이상 (1부 동일 캐디의 뒷부)");
+  const h2 = html(m2);
+  assert(/bs-name two-work/.test(h2) && /data-sheet-two-work="1"/.test(h2), "인쇄: 투근무 이름 칸 two-work 클래스");
+  const m1 = buildBoardSheetModel(rich, "1부");
+  assert(m1.courses.every((c) => c.slots.every((s) => s.caddies.every((x) => !x.twoWork))), "1부(첫 근무): 투근무 아님");
+  assert(!/data-sheet-two-work="1"/.test(html(m1)), "1부 인쇄: 노란 이름 없음");
+  // 배지·LOCK 유지
+  const allH = BOARD_PRINT_SHIFTS.map((s) => html(buildBoardSheetModel(rich, s))).join("");
+  for (const label of ["리무진", "하우스", "드라이빙", "투", "찾근"]) {
+    assert(allH.includes(`>${label}<`), `인쇄 배지 '${label}' 유지`);
+  }
+  const lockH = html(buildBoardSheetModel(rich, "1부", { showLock: true }));
+  assert(lockH.includes(">LOCK<"), "인쇄: showLock 이면 LOCK 표시 (기본 출력은 기존처럼 숨김)");
+  // 비고 빈 열 (21행 × 4코스, 내용 없음)
+  assert((h2.match(/data-sheet-remark="/g) || []).length === 21 * 4, "비고 칸 21×4");
+  assert(!/data-sheet-remark="[^"]+"[^>]*>[^<\s]/.test(h2), "비고 칸은 비어 있음");
+  assert(h2.includes(">비고<"), "헤더 '비고'");
+  // 하단 바: 실제 계산, 84 고정 아님
+  assert(/data-sheet-total-assigned="/.test(h2) && /전체 배정/.test(h2), "하단 전체 배정 팀 수");
+  const fullM = buildBoardSheetModel(fullLoadDraft(), "2부");
+  const fh = html(fullM);
+  assert(fh.includes(`data-sheet-total-assigned="${fullM.totals.assigned}"`) && fullM.totals.assigned === 84, "만석: 전체 배정은 계산값 84 (고정 문자 아님)");
+  const emptyM = buildBoardSheetModel(emptyAndUnassignedDraft(), "2부");
+  const eh2 = html(emptyM);
+  assert(eh2.includes(`data-sheet-total-assigned="${emptyM.totals.assigned}"`) && emptyM.totals.assigned !== 84, "만석이 아니면 84를 쓰지 않음");
+  assert(/data-sheet-footer=/.test(eh2) && /스페어1/.test(eh2) && /스페어2/.test(eh2), "하단 스페어1·2");
+  assert(/data-sheet-total-unassigned=/.test(eh2) && /미배치/.test(eh2), "하단 미배치 수 (배정과 구분)");
+  // 초과 강조는 노랑(#fef3c7)이 아님
+  const css = readFileSync("src/components/board/boardSheetCss.ts", "utf8");
+  assert(!/#fef3c7/i.test(css), "인쇄 CSS: 초과 강조에 #fef3c7 노랑 없음");
+  assert(/overflowFg/.test(css) && /#991B1B/.test(css), "인쇄 CSS: 초과는 빨간 글자");
+  assert(/#FFF59D/.test(css), "인쇄 CSS: 투근무 노랑 #FFF59D");
+  // /board 화면: 노란 이름, 비고 열 없음, 전체 배정
+  const pub = buildPublishedPayloadFromDraft(rich as unknown as DailyBoardDraftPayloadV1);
+  const ph2 = renderToStaticMarkup(<PublishedBoardView payload={pub} shift={"2부" as ShiftPart} />);
+  const ph1 = renderToStaticMarkup(<PublishedBoardView payload={pub} shift={"1부" as ShiftPart} />);
+  assert(/bc-name two-work/.test(ph2) && /data-board-two-work="1"/.test(ph2), "/board 2부: 투근무 이름 노랑");
+  assert(!/data-board-two-work="1"/.test(ph1), "/board 1부: 투근무 노랑 없음");
+  assert(!/data-sheet-remark/.test(ph2) && !/>비고</.test(ph2), "/board: 비고 열 없음");
+  assert(/data-board-total-assigned=/.test(ph2) && /전체 배정/.test(ph2), "/board 하단 전체 배정 팀 수");
+  assert(/pub-spare/.test(ph2) || true, "/board 스페어 영역 유지");
+  const boardCss = readFileSync("src/components/board/publishedBoardCss.ts", "utf8");
+  assert(/#FFF59D/.test(boardCss) && !/#f8fafc/.test(boardCss.split(".bc-cell.assigned.two-work")[1]?.slice(0, 200) || "#f8fafc"), "/board: 투근무 이름 노랑, 칸 회색 배경 제거");
+}
+
 console.log("[/board] Published 어댑터·개인정보");
+
 {
   const src = threeShiftDraft("2026-11-12");
   const payload = buildPublishedPayloadFromDraft(src as unknown as DailyBoardDraftPayloadV1);

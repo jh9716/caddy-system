@@ -113,14 +113,17 @@ export const publishedBoardCss = `
     background: #fff;
   }
   .bc-cell.assigned.special { background: #fffbeb; }
-  .bc-cell.assigned.two-work {
-    background: #f8fafc;
-    box-shadow: inset 2px 0 0 #94a3b8;
+  /* 투근무: 이름 칸만 노랑. 회색 배경은 쓰지 않음. 특수/찾근 배경과 겹치면 투 노랑이 이김(칸 배경은 흰색). */
+  .bc-cell.assigned.two-work,
+  .bc-cell.assigned.special.two-work,
+  .bc-cell.assigned.chageun.two-work {
+    background: #fff;
   }
   .bc-cell.assigned.chageun {
     background: #fffdf6;
     box-shadow: inset 2px 0 0 #d6b37a;
   }
+  .bc-cell.assigned.chageun.two-work { box-shadow: inset 2px 0 0 #d6b37a; }
   .bc-cell.assigned.limo { box-shadow: inset 0 -3px 0 #f59e0b; }
   .bc-cell.assigned.drive { box-shadow: inset 3px 0 0 #7c3aed; }
   .bc-slot {
@@ -195,6 +198,13 @@ export const publishedBoardCss = `
     color: #0f172a;
     line-height: 1.2;
   }
+  .bc-name.two-work {
+    background: #FFF59D;
+    padding: 0 3px;
+    border-radius: 2px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
   .bc-affil {
     font-size: 0.66rem;
     font-weight: 700;
@@ -262,6 +272,21 @@ export const publishedBoardCss = `
   .pub-spare-label {
     font-weight: 800;
     color: #0f172a;
+  }
+  .pub-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 4px 2px;
+  }
+  .pub-foot .pub-spare { padding: 4px 0; }
+  .pub-totals {
+    font-size: 0.82rem;
+    font-weight: 800;
+    color: #0f172a;
+    margin-left: auto;
   }
   .pub-empty-shift {
     padding: 18px 8px;

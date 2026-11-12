@@ -265,11 +265,13 @@ export default function PublishedBoardPage() {
 
       <style>{`
         .pub-page {
-          max-width: 720px;
+          width: 100%;
+          max-width: min(100%, 1760px);
           margin: 0 auto;
           padding: 12px 10px 72px;
           display: grid;
           gap: 10px;
+          box-sizing: border-box;
         }
         .pub-head h1 {
           margin: 0;

@@ -212,8 +212,8 @@ section("workbook 구조 / 빈 셀 / 닫힌 코스 / 1부만");
   assert(sheets[2].shiftLine === "부: 3부", "3부 라벨");
   assert(
     sheets.every((s) => s.headers.join("|") === BOARD_XLSX_TABLE_HEADERS.join("|")) &&
-      BOARD_XLSX_TABLE_HEADERS.join("|") === "No|베르힐||스카이||오션||레이크|",
-    "No|베르힐(시각·캐디)|스카이|오션|레이크 — 공통 시트 열 구조 (의도 변경: 기존 시간|4코스)"
+      BOARD_XLSX_TABLE_HEADERS.join("|") === "No|베르힐|||스카이|||오션|||레이크||",
+    "No|베르힐(시각·캐디·비고)|스카이|오션|레이크 — 공통 시트 열 구조"
   );
   assert(cellAt(sheets, "1부", "05:57", "VERTHILL") === "박지아", "베르힐 이름");
   assert(cellAt(sheets, "1부", "05:57", "SKY") === "강보미", "스카이 이름");

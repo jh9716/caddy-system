@@ -12,6 +12,8 @@ import {
 } from "@/lib/assignmentBoardExport";
 import {
   BOARD_SHEET_CLOSED_LABEL,
+  BOARD_SHEET_COLS_PER_COURSE,
+  BOARD_SHEET_REMARK_LABEL,
   BOARD_SHEET_TITLE,
   boardSheetCourseSummary,
   boardSheetSlotText,
@@ -41,19 +43,21 @@ export const BOARD_XLSX_TITLE = BOARD_SHEET_TITLE;
 export const BOARD_XLSX_MIME =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 /**
- * 공통 시트(/board·PNG·A4)와 같은 행·열: No | (코스별 시각, 캐디) × 베르힐·스카이·오션·레이크.
- * 4행: 코스명(2칸 병합), 5행: 시각/캐디, 6행부터 팀 순번 1..21(+초과분).
+ * 공통 시트(/board·PNG·A4)와 같은 행·열: No | (코스별 시각, 캐디, 비고) × 베르힐·스카이·오션·레이크.
+ * 4행: 코스명(3칸 병합), 5행: 시각/캐디/비고, 6행부터 팀 순번 1..21(+초과분).
+ * 비고는 빈 칸이며 저장하지 않는다. 시트 보호를 걸지 않아 사용자가 직접 적을 수 있다.
  */
 export const BOARD_XLSX_TABLE_HEADERS = [
   "No",
-  ...COURSE_CODES.flatMap((code) => [BOARD_EXPORT_COURSE_LABELS[code], ""]),
+  ...COURSE_CODES.flatMap((code) => [BOARD_EXPORT_COURSE_LABELS[code], "", ""]),
 ] as const;
-/** AOA 0-index: 제목 · 날짜 · 부 · 요약 · 코스 헤더 · 시각/캐디 헤더 · 데이터 */
+/** AOA 0-index: 제목 · 날짜 · 부 · 요약 · 코스 헤더 · 시각/캐디/비고 헤더 · 데이터 */
 export const BOARD_XLSX_INFO_ROW = 3;
 export const BOARD_XLSX_HEADER_ROW = 4;
 export const BOARD_XLSX_SUBHEADER_ROW = 5;
 export const BOARD_XLSX_DATA_START_ROW = 6;
-export const BOARD_XLSX_COLUMN_COUNT = 1 + COURSE_CODES.length * 2;
+export const BOARD_XLSX_COLUMN_COUNT = 1 + COURSE_CODES.length * BOARD_SHEET_COLS_PER_COURSE;
+export const BOARD_XLSX_TWO_WORK_FILL = "FFFFF59D";
 
 const LINKED_KIND_TAG: Partial<Record<AssignmentKind, string>> = {
   oneTwo: "1·2",
@@ -158,7 +162,7 @@ export function boardSheetInfoLine(model: BoardSheetModel): string {
     model.weekday ? `요일: ${model.weekday}` : null,
     `스페어1: ${model.spare.spare1Label || "-"}`,
     `스페어2: ${model.spare.spare2Label || "-"}`,
-    `배정 ${model.totals.assigned} · 미배치 ${model.totals.unassigned}`,
+    `전체 배정 ${model.totals.assigned} · 미배치 ${model.totals.unassigned}`,
     ...model.courses.map((c) => `${c.label} ${boardSheetCourseSummary(c)}`),
     model.overflowCourses.length ? `21팀 초과 ${model.rowCount}행(잘림 없음)` : null,
   ].filter(Boolean);
@@ -172,28 +176,67 @@ export function boardSheetToAoa(model: BoardSheetModel): unknown[][] {
     [`부: ${model.shift}`],
     [boardSheetInfoLine(model)],
     [...BOARD_XLSX_TABLE_HEADERS],
-    ["", ...model.courses.flatMap((c) => (c.open ? ["시각", "캐디"] : [BOARD_SHEET_CLOSED_LABEL, BOARD_SHEET_CLOSED_LABEL]))],
+    [
+      "",
+      ...model.courses.flatMap((c) =>
+        c.open
+          ? ["시각", "캐디", BOARD_SHEET_REMARK_LABEL]
+          : [BOARD_SHEET_CLOSED_LABEL, BOARD_SHEET_CLOSED_LABEL, BOARD_SHEET_CLOSED_LABEL]
+      ),
+    ],
   ];
   for (let i = 0; i < model.rowCount; i++) {
     const line: unknown[] = [i + 1];
     for (const course of model.courses) {
       const slot = course.open ? course.slots[i] : undefined;
       if (!slot) {
-        line.push("", "");
+        line.push("", "", "");
         continue;
       }
-      line.push(slot.teeTime, slot.state === "empty" ? BOARD_EMPTY_CELL_MARK : boardSheetSlotText(slot, model.includeTeamName));
+      line.push(
+        slot.teeTime,
+        slot.state === "empty" ? BOARD_EMPTY_CELL_MARK : boardSheetSlotText(slot, model.includeTeamName),
+        "" // 비고: 빈 칸, 저장 없음. 사용자가 엑셀에서 직접 작성.
+      );
     }
     aoa.push(line);
   }
   return aoa;
 }
 
+/** 엑셀 1-based 열 글자 (A, B, …, Z, AA). 이 시트는 13열이라 Z 안쪽. */
+function xlsxColLetter(index0: number): string {
+  let n = index0 + 1;
+  let s = "";
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+/** 투근무 캐디 칸 주소 (스타일 주입용). A1 형식. */
+export function boardSheetTwoWorkCaddyRefs(model: BoardSheetModel): string[] {
+  const refs: string[] = [];
+  for (let i = 0; i < model.rowCount; i++) {
+    model.courses.forEach((course, k) => {
+      const slot = course.open ? course.slots[i] : undefined;
+      if (!slot) return;
+      if (!slot.caddies.some((c) => c.twoWork)) return;
+      const col = 1 + k * BOARD_SHEET_COLS_PER_COURSE + 1; // 캐디 열
+      const row = BOARD_XLSX_DATA_START_ROW + i + 1; // 1-based
+      refs.push(`${xlsxColLetter(col)}${row}`);
+    });
+  }
+  return refs;
+}
+
 function applySheetLayout(ws: WorkSheet, dataRowCount: number) {
-  // A4 가로 시트 비율: No 좁게, 시각 좁게, 캐디 넓게
+  // A4 가로 시트 비율: No 좁게, 시각 좁게, 캐디, 비고(사용자가 적을 자리)
   ws["!cols"] = [
     { wch: 4 },
-    ...COURSE_CODES.flatMap(() => [{ wch: 7 }, { wch: 22 }]),
+    ...COURSE_CODES.flatMap(() => [{ wch: 7 }, { wch: 18 }, { wch: 12 }]),
   ];
   const rows: RowInfo[] = [
     { hpt: 22 },
@@ -213,11 +256,11 @@ function applySheetLayout(ws: WorkSheet, dataRowCount: number) {
     { s: { r: 1, c: 0 }, e: { r: 1, c: last } },
     { s: { r: 2, c: 0 }, e: { r: 2, c: last } },
     { s: { r: 3, c: 0 }, e: { r: 3, c: last } },
-    // "No" 헤더 2행 병합 + 코스명 2칸 병합
+    // "No" 헤더 2행 병합 + 코스명 3칸 병합
     { s: { r: BOARD_XLSX_HEADER_ROW, c: 0 }, e: { r: BOARD_XLSX_SUBHEADER_ROW, c: 0 } },
     ...COURSE_CODES.map((_, k) => ({
-      s: { r: BOARD_XLSX_HEADER_ROW, c: 1 + k * 2 },
-      e: { r: BOARD_XLSX_HEADER_ROW, c: 2 + k * 2 },
+      s: { r: BOARD_XLSX_HEADER_ROW, c: 1 + k * BOARD_SHEET_COLS_PER_COURSE },
+      e: { r: BOARD_XLSX_HEADER_ROW, c: 3 + k * BOARD_SHEET_COLS_PER_COURSE },
     })),
   ];
   ws["!margins"] = {
@@ -267,7 +310,8 @@ export async function buildBoardExportWorkbook(
  */
 export function applyBoardXlsxPrintSetup(
   XLSX: typeof import("xlsx"),
-  bytes: Uint8Array
+  bytes: Uint8Array,
+  twoWorkRefsBySheet?: ReadonlyArray<readonly string[]>
 ): Uint8Array {
   try {
     const mod = XLSX as unknown as { CFB?: CfbApi; default?: { CFB?: CfbApi } };
@@ -311,10 +355,13 @@ export function applyBoardXlsxPrintSetup(
       changed += 1;
     });
     if (!changed) return bytes;
-    // 칸 서식(테두리·굵게·머리글 음영)은 styles.xml 주입이 성공했을 때만 적용
+    // 칸 서식(테두리·굵게·머리글 음영·투근무 노랑)은 styles.xml 주입이 성공했을 때만 적용
     for (const [i, xml] of sheetXml) {
       const entry = zip.FileIndex[i];
-      entry.content = enc.encode(stylesOk ? styleBoardSheetCells(xml) : xml);
+      const path = zip.FullPaths[i] || "";
+      const sheetNo = Number(/sheet(\d+)\.xml$/.exec(path)?.[1] || 0);
+      const twoRefs = twoWorkRefsBySheet?.[sheetNo - 1] || [];
+      entry.content = enc.encode(stylesOk ? styleBoardSheetCells(xml, twoRefs) : xml);
       entry.size = (entry.content as Uint8Array).length;
     }
     return toUint8Array(CFB.write(zip, { fileType: "zip", type: "array", compression: true }));
@@ -323,8 +370,8 @@ export function applyBoardXlsxPrintSetup(
   }
 }
 
-/** 공통 시트 서식 인덱스 (styles.xml cellXfs 뒤에 추가되는 순서) */
-const XF = { title: 1, info: 2, head: 3, no: 4, time: 5, caddy: 6 } as const;
+/** 공통 시트 서식 인덱스 (styles.xml cellXfs 뒤에 추가되는 순서, 0은 기본) */
+const XF = { title: 1, info: 2, head: 3, no: 4, time: 5, caddy: 6, remark: 7, twoWork: 8, overflowNo: 9 } as const;
 
 function injectBoardXlsxStyles(xml: string): string | null {
   const fonts = /<fonts count="(\d+)">([\s\S]*?)<\/fonts>/.exec(xml);
@@ -339,10 +386,15 @@ function injectBoardXlsxStyles(xml: string): string | null {
   const fontTitle = f0 + 1;
   const fontSmall = f0 + 2;
   const fillHead = fl0;
+  const fillTwo = fl0 + 1;
+  const fillOver = fl0 + 2;
   const borderThin = b0;
   const thin = '<left style="thin"><color rgb="FF000000"/></left><right style="thin"><color rgb="FF000000"/></right><top style="thin"><color rgb="FF000000"/></top><bottom style="thin"><color rgb="FF000000"/></bottom><diagonal/>';
   const center = '<alignment horizontal="center" vertical="center" wrapText="1"/>';
   const left = '<alignment vertical="center" wrapText="1"/>';
+  // 비고: 잠금 해제 (시트 보호를 걸지 않더라도 locked=0 명시)
+  const unlocked = '<protection locked="0"/>';
+  const fontOver = f0 + 3;
   const newXfs = [
     `<xf numFmtId="0" fontId="${fontTitle}" fillId="0" borderId="0" xfId="0" applyFont="1"/>`,
     `<xf numFmtId="0" fontId="${fontSmall}" fillId="0" borderId="0" xfId="0" applyFont="1"/>`,
@@ -350,27 +402,37 @@ function injectBoardXlsxStyles(xml: string): string | null {
     `<xf numFmtId="0" fontId="${fontSmall}" fillId="0" borderId="${borderThin}" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1">${center}</xf>`,
     `<xf numFmtId="0" fontId="${fontBold}" fillId="0" borderId="${borderThin}" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1">${center}</xf>`,
     `<xf numFmtId="0" fontId="${fontBold}" fillId="0" borderId="${borderThin}" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1">${left}</xf>`,
+    `<xf numFmtId="0" fontId="${fontSmall}" fillId="0" borderId="${borderThin}" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1" applyProtection="1">${left}${unlocked}</xf>`,
+    `<xf numFmtId="0" fontId="${fontBold}" fillId="${fillTwo}" borderId="${borderThin}" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">${left}</xf>`,
+    `<xf numFmtId="0" fontId="${fontOver}" fillId="${fillOver}" borderId="${borderThin}" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">${center}</xf>`,
   ];
   return xml
-    .replace(fonts[0], `<fonts count="${f0 + 3}">${fonts[2]}<font><b/><sz val="12"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="16"/><name val="Calibri"/><family val="2"/></font><font><sz val="10"/><color rgb="FF333333"/><name val="Calibri"/><family val="2"/></font></fonts>`)
-    .replace(fills[0], `<fills count="${fl0 + 1}">${fills[2]}<fill><patternFill patternType="solid"><fgColor rgb="FFE5E7EB"/><bgColor indexed="64"/></patternFill></fill></fills>`)
+    .replace(fonts[0], `<fonts count="${f0 + 4}">${fonts[2]}<font><b/><sz val="12"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="16"/><name val="Calibri"/><family val="2"/></font><font><sz val="10"/><color rgb="FF333333"/><name val="Calibri"/><family val="2"/></font><font><b/><sz val="10"/><color rgb="FF991B1B"/><name val="Calibri"/><family val="2"/></font></fonts>`)
+    .replace(fills[0], `<fills count="${fl0 + 3}">${fills[2]}<fill><patternFill patternType="solid"><fgColor rgb="FFE5E7EB"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="${BOARD_XLSX_TWO_WORK_FILL}"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF4F4F5"/><bgColor indexed="64"/></patternFill></fill></fills>`)
     .replace(borders[0], `<borders count="${b0 + 1}">${borders[2]}<border>${thin}</border></borders>`)
     .replace(xfs[0], `<cellXfs count="${1 + newXfs.length}">${xfs[2]}${newXfs.join("")}</cellXfs>`);
 }
 
-function styleBoardSheetCells(xml: string): string {
+function styleBoardSheetCells(xml: string, twoWorkRefs: readonly string[] = []): string {
   const head1 = BOARD_XLSX_HEADER_ROW + 1;
   const head2 = BOARD_XLSX_SUBHEADER_ROW + 1;
   const data = BOARD_XLSX_DATA_START_ROW + 1;
+  const two = new Set(twoWorkRefs);
+  const overflowFrom = data + 21; // 22번째 데이터 행부터 (기본 21행 다음)
   return xml.replace(/<c r="([A-Z]+)(\d+)"(?![^>]*\ss=)/g, (m, col: string, rowStr: string) => {
     const r = Number(rowStr);
+    const ref = `${col}${rowStr}`;
     let xf: number;
     if (r === 1) xf = XF.title;
     else if (r < head1) xf = XF.info;
     else if (r <= head2) xf = XF.head;
     else if (r >= data) {
-      const c = col.charCodeAt(0) - 65;
-      xf = c === 0 ? XF.no : c % 2 === 1 ? XF.time : XF.caddy;
+      const c = col.length === 1 ? col.charCodeAt(0) - 65 : 26 * (col.charCodeAt(0) - 64) + (col.charCodeAt(1) - 65);
+      if (c === 0) xf = r >= overflowFrom ? XF.overflowNo : XF.no;
+      else {
+        const kind = (c - 1) % BOARD_SHEET_COLS_PER_COURSE;
+        xf = kind === 0 ? XF.time : kind === 1 ? (two.has(ref) ? XF.twoWork : XF.caddy) : XF.remark;
+      }
     } else return m;
     return `<c r="${col}${rowStr}" s="${xf}"`;
   });
@@ -405,13 +467,16 @@ export async function writeBoardExportXlsxBytes(
 ): Promise<Uint8Array> {
   const XLSX = await loadBoardExportXlsx();
   const wb = await buildBoardExportWorkbook(draft);
+  const twoWorkRefsBySheet = BOARD_EXPORT_SHIFTS.map((shift) =>
+    boardSheetTwoWorkCaddyRefs(buildBoardSheetModel(draft, shift))
+  );
   const out = XLSX.write(wb, {
     bookType: "xlsx",
     type: "array",
     compression: true,
     cellDates: false,
   });
-  return applyBoardXlsxPrintSetup(XLSX, toUint8Array(out));
+  return applyBoardXlsxPrintSetup(XLSX, toUint8Array(out), twoWorkRefsBySheet);
 }
 
 export type ParsedBoardExcelRow = {
@@ -458,14 +523,14 @@ export async function parseBoardExportWorkbook(
     for (let i = BOARD_XLSX_DATA_START_ROW; i < aoa.length; i++) {
       const line = aoa[i] || [];
       COURSE_CODES.forEach((code, k) => {
-        const teeTime = cellString(line[1 + k * 2]).trim();
+        const teeTime = cellString(line[1 + k * BOARD_SHEET_COLS_PER_COURSE]).trim();
         if (!teeTime) return;
         let row = byTime.get(teeTime);
         if (!row) {
           row = { teeTime, values: Object.fromEntries(COURSE_CODES.map((c) => [c, ""])) as Record<CourseCode, string> };
           byTime.set(teeTime, row);
         }
-        row.values[code] = cellString(line[2 + k * 2]);
+        row.values[code] = cellString(line[2 + k * BOARD_SHEET_COLS_PER_COURSE]);
       });
     }
     const rows = [...byTime.values()].sort((x, y) => x.teeTime.localeCompare(y.teeTime));

@@ -80,7 +80,11 @@ function ReadOnlySlot({ row }: { row: PublishedPlacementV1 }) {
         {vacant ? (
           <span className="bc-vacant">미배치</span>
         ) : (
-          <span className="bc-name" title={row.caddyName}>
+          <span
+            className={`bc-name${row.twoWork ? " two-work" : ""}`}
+            title={row.caddyName}
+            data-board-two-work={row.twoWork ? "1" : undefined}
+          >
             {row.caddyName}
           </span>
         )}
@@ -119,6 +123,8 @@ export default function PublishedBoardView({
   // 시간축 = 운영 티시트 ∪ 확정 배정 시각. 계산으로 만든 사이 시각은 넣지 않는다.
   const board = buildPublishedShiftBoard(payload, shift, { fillInterior: false });
   const counts = countPublishedCourseTeams(board);
+  const totalAssigned = COURSE_CODES.reduce((n, code) => n + counts[code].teams, 0);
+  const totalVacant = COURSE_CODES.reduce((n, code) => n + counts[code].vacant, 0);
   const spare =
     payload.sparesByShift.find((s) => s.shift === shift) || null;
   const open = new Set(payload.openCourses);
@@ -218,7 +224,17 @@ export default function PublishedBoardView({
           </table>
         )}
       </div>
-      <SpareStrip spare={spare} shift={shift} />
+      <div className="pub-foot" data-board-foot="">
+        <SpareStrip spare={spare} shift={shift} />
+        <div
+          className="pub-totals"
+          data-board-total-assigned={totalAssigned}
+          data-board-total-vacant={totalVacant}
+        >
+          전체 배정 {totalAssigned}팀
+          {totalVacant ? ` · 미배치 ${totalVacant}` : ""}
+        </div>
+      </div>
       <style>{publishedBoardCss}</style>
     </div>
   );
