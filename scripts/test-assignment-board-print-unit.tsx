@@ -47,6 +47,9 @@ import {
   GAPPED_SHIFT_TIMES,
   gappedTimetableDraft,
   largeDraft,
+  legacySparseThirdShiftDraft,
+  OPERATING_SHIFT_TIMES,
+  operatingTimetableDraft,
   richMobileDraft,
   threeShiftDraft,
 } from "./fixtures/boardPrintFixtures";
@@ -241,6 +244,58 @@ console.log("[빈타임 시간축] 1·2·3부 공유 격자 · 코스별 압축 
   assert(JSON.stringify(d) === before, "빈타임 모델 생성 후 draft 불변");
 }
 
+console.log("[운영 티시트] 2026-11-11 형태 · 부별 시작~종료 · 앞뒤 빈타임");
+{
+  const d = operatingTimetableDraft();
+  const pub = buildPublishedPayloadFromDraft(d as unknown as DailyBoardDraftPayloadV1);
+  for (const shift of BOARD_PRINT_SHIFTS) {
+    const times = OPERATING_SHIFT_TIMES[shift];
+    const m = buildBoardSheetModel(d, shift);
+    const board = buildPublishedShiftBoard(pub, shift);
+    assert(m.rowCount === times.length, `${shift}: 행 수 = 티시트 ${times.length} (${times[0]}~${times[times.length - 1]})`);
+    assert(m.courses.every((c) => c.slots.every((s, i) => s.teeTime === times[i])), `${shift}: 4코스 공유 시간축 (압축 없음)`);
+    assert(board.map((r) => r.teeTime).join() === times.join(), `/board ${shift}: 티시트 시작~종료`);
+    assert(m.overflowCourses.length === 0, `${shift}: 21팀 이하`);
+  }
+  {
+    const m3 = buildBoardSheetModel(d, "3부");
+    const times = OPERATING_SHIFT_TIMES["3부"];
+    assert(m3.rowCount === 18 && times[0] === "16:33" && times[17] === "18:32", "3부 티시트 18칸 16:33~18:32 (18:46 고정 아님)");
+    assert(m3.courses[0].slots[0].teeTime === "16:33", "3부 첫 행 = 티시트 시작 16:33");
+    assert(m3.courses[0].slots[17].teeTime === "18:32", "3부 마지막 행 = 티시트 종료 18:32");
+    const hole = m3.courses.map((c) => c.slots.find((s) => s.teeTime === "17:08"));
+    assert(hole.every((s) => s?.state === "empty"), "3부 17:08 티시트 빈타임 유지");
+    assert(m3.courses.find((c) => c.code === "LAKE")!.slots[0].state === "empty", "3부 레이크: 티시트 시작 16:33은 첫 배정 앞 빈타임");
+    assert(m3.courses.find((c) => c.code === "SKY")!.slots[0].state === "empty", "3부 스카이: 티시트 시작 16:33은 첫 배정 앞 빈타임");
+    assert(!m3.courses.some((c) => c.slots.some((s) => s.teeTime === "18:46")), "다른 날짜의 18:46을 만들지 않음");
+    const h = html(m3);
+    assert(h.includes('data-sheet-time="16:33"') && h.includes('data-sheet-time="18:32"') && h.includes('data-sheet-time="17:08"'), "인쇄 3부: 시작·종료·내부 빈타임");
+    const ph = renderToStaticMarkup(<PublishedBoardView payload={pub} shift={"3부" as ShiftPart} />);
+    assert(ph.includes('data-board-time="16:33"') && ph.includes('data-board-time="18:32"') && ph.includes('data-board-time="17:08"'), "/board 3부: 시작·종료·내부 빈타임");
+  }
+  {
+    const m1 = buildBoardSheetModel(d, "1부");
+    assert(m1.rowCount === 21 && m1.courses[0].slots[0].teeTime === "06:00" && m1.courses[0].slots[20].teeTime === "08:20", "1부 21칸 06:00~08:20");
+    assert(m1.courses.find((c) => c.code === "SKY")!.slots[0].state === "empty", "1부 스카이 06:00: 티시트 시작·첫 배정(06:07) 앞 빈타임");
+    assert(m1.courses.find((c) => c.code === "OCEAN")!.slots[0].state === "empty", "1부 오션 06:00: 티시트 시작·첫 배정(06:07) 앞 빈타임");
+    const m2 = buildBoardSheetModel(d, "2부");
+    assert(m2.rowCount === 21 && m2.courses[0].slots[0].teeTime === "11:20" && m2.courses[0].slots[20].teeTime === "13:40", "2부 21칸 11:20~13:40");
+  }
+}
+
+console.log("[레거시 무티시트] 2026-11-10 형태 · 앞뒤 연장 없음");
+{
+  const d = legacySparseThirdShiftDraft();
+  const m = buildBoardSheetModel(d, "3부");
+  const times = m.courses[0].slots.map((s) => s.teeTime);
+  assert(times[0] === "16:40" && times[times.length - 1] === "18:04", "티시트 없으면 첫·끝 = 배정 min~max");
+  assert(times.includes("16:54") && times.includes("17:08"), "내부 7분 공석은 보간");
+  assert(!times.includes("16:33") && !times.includes("18:11") && !times.includes("18:46"), "배정 앞·뒤 빈타임은 티시트 없이 만들지 않음");
+  const pub = buildPublishedPayloadFromDraft(d as unknown as DailyBoardDraftPayloadV1);
+  const board = buildPublishedShiftBoard(pub, "3부");
+  assert(board[0].teeTime === "16:40" && !board.some((r) => r.teeTime === "16:33"), "/board도 티시트 없으면 16:33 없음");
+}
+
 
 console.log("[/board 시간축] 운영 PublishedBoardView 방식 (시각 행 × 4코스 열)");
 {
@@ -412,6 +467,15 @@ console.log("[XLSX] 같은 행·열 구조");
     );
     assert(gaoa.length - BOARD_XLSX_DATA_START_ROW === times.length, `xlsx ${shift}: 행 수 = 시간표 ${times.length} (압축 없음)`);
   }
+  const ops = operatingTimetableDraft();
+  const opsSheets = await parseBoardExportWorkbook(await writeBoardExportXlsxBytes(ops));
+  for (const shift of BOARD_PRINT_SHIFTS) {
+    const times = OPERATING_SHIFT_TIMES[shift];
+    const sheet = opsSheets.find((s) => s.name === shift)!;
+    assert(sheet.rows[0].teeTime === times[0] && sheet.rows.at(-1)?.teeTime === times[times.length - 1], `xlsx 운영 ${shift}: ${times[0]}~${times[times.length - 1]}`);
+    assert(sheet.rows.length === times.length, `xlsx 운영 ${shift}: ${times.length}행 (21팀 압축/패딩 없음)`);
+  }
+  assert(opsSheets.find((s) => s.name === "3부")!.rows.some((r) => r.teeTime === "17:08" && !String(r.values.VERTHILL || "").trim()), "xlsx 3부: 17:08 빈타임");
 }
 }
 

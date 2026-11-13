@@ -22,6 +22,7 @@ import { REASON } from "../src/lib/autoAssignEngine";
 import {
   BOARD_EMPTY_CELL_MARK,
   BOARD_UNASSIGNED_CELL_LABEL,
+  collectShiftBoardTeeTimes,
   fillInteriorTeeTimes,
   inferCourseTeeIntervalMinutes,
 } from "../src/lib/assignmentBoardTeeSheet";
@@ -273,6 +274,39 @@ section("찾근: fixed+찾근 reason만, 일반/54홀은 유지");
       boardAssignmentMarks(regular, [regular]).chageun === false,
     "일반 근무 표시 유지"
   );
+}
+
+section("티시트 있으면 첫 배정 앞·마지막 뒤 빈타임, 없으면 min~max만");
+{
+  const thirdTimes = [
+    "16:33", "16:40", "16:47", "16:54", "17:01", "17:08", "17:15", "17:22",
+    "17:29", "17:36", "17:43", "17:50", "17:57", "18:04", "18:11", "18:18", "18:25", "18:32",
+  ];
+  const teeSheet = COURSE_CODES.flatMap((course) =>
+    thirdTimes.map((teeTime) => ({ course, shift: "3부" as ShiftPart, teeTime }))
+  );
+  const withSheet = collectShiftBoardTeeTimes({
+    shift: "3부",
+    teeSheet,
+    reservations: [{ course: "VERTHILL", shift: "3부", teeTime: "16:40" }],
+  });
+  assert(withSheet[0] === "16:33" && withSheet.at(-1) === "18:32", "티시트 3부: 16:33~18:32");
+  assert(withSheet.includes("17:08") && withSheet.length === 18, "티시트 내부 빈타임 17:08 포함, 18칸");
+  assert(!withSheet.includes("18:46"), "다른 날짜의 18:46을 고정 격자로 만들지 않음");
+  const noSheet = collectShiftBoardTeeTimes({
+    shift: "3부",
+    reservations: [
+      { course: "VERTHILL", shift: "3부", teeTime: "16:40" },
+      { course: "VERTHILL", shift: "3부", teeTime: "16:47" },
+      { course: "VERTHILL", shift: "3부", teeTime: "17:01" },
+      { course: "VERTHILL", shift: "3부", teeTime: "17:22" },
+      { course: "VERTHILL", shift: "3부", teeTime: "17:43" },
+      { course: "VERTHILL", shift: "3부", teeTime: "18:04" },
+    ],
+  });
+  assert(noSheet[0] === "16:40" && noSheet.at(-1) === "18:04", "티시트 없으면 배정 min~max");
+  assert(noSheet.includes("16:54") && noSheet.includes("17:08"), "내부 7분 공석은 보간");
+  assert(!noSheet.includes("16:33") && !noSheet.includes("18:11") && !noSheet.includes("18:46"), "앞·뒤 연장 없음");
 }
 
 section("코스 간격 추론: 8분은 7분 격자를 만들지 않음");

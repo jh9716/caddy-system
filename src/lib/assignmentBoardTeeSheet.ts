@@ -76,7 +76,10 @@ export function inferCourseTeeIntervalMinutes(
   return best;
 }
 
-/** min~max 사이만, 관측 간격의 배수 gap만 채운다. 앞뒤 연장 없음. */
+/**
+ * min~max 사이만, 관측 간격의 배수 gap만 채운다. 앞뒤 연장 없음.
+ * 부 시작·종료 빈타임은 이 함수가 만들지 않는다. 날짜별 티시트(예약 엑셀 공석 행)가 있어야 한다.
+ */
 export function fillInteriorTeeTimes(times: readonly string[]): string[] {
   const original = [...new Set(times.map((t) => String(t || "").trim()).filter(Boolean))];
   const uniq = original.filter(isBoardTeeTime).sort((a, b) => a.localeCompare(b));
@@ -130,6 +133,8 @@ export function collectShiftBoardTeeTimes(input: {
   /**
    * false: 운영 티시트 ∪ 예약 시각만 (계산으로 만든 사이 시각 없음).
    * 기본 true: 코스별 관측 간격으로 내부 공석을 보간해 빈타임 행을 유지. /board·인쇄 표시용.
+   * 티시트가 있으면 그 날짜·부의 시작~종료(엑셀 공석 행 포함)가 축이다.
+   * 티시트가 없는 레거시 게시본은 배정 min~max만 — 앞·뒤 빈타임을 날짜 고정 격자로 만들지 않는다.
    */
   fillInterior?: boolean;
 }): string[] {

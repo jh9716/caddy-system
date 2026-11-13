@@ -32,11 +32,16 @@ import {
   GAPPED_SHIFT_TIMES,
   gappedTimetableDraft,
   largeDraft,
+  legacySparseThirdShiftDraft,
+  OPERATING_SHIFT_TIMES,
+  operatingTimetableDraft,
+  synthName,
   threeShiftDraft,
 } from "./fixtures/boardPrintFixtures";
-import { buildPublishedPayloadFromDraft } from "../src/lib/dailyBoardPublished";
+import { buildPublishedPayloadFromDraft, type DailyBoardPublishedPayloadV1 } from "../src/lib/dailyBoardPublished";
 import type { DailyBoardDraftPayloadV1 } from "../src/lib/dailyBoardDraft";
 import { publishedBoardPrintDraft } from "../src/lib/publishedBoardPrint";
+import { BOARD_SHEET_BASE_ROWS, type BoardSheetModel } from "../src/lib/boardSheet";
 
 (globalThis as unknown as { React: typeof React }).React = React;
 
@@ -250,6 +255,38 @@ async function printCase(cdp: Cdp, name: string, sheet: BoardPrintSheet, opts: {
     const lost = opts.required.filter((s) => !compact.includes(String(s).replace(/\s+/g, "")));
     assert(lost.length === 0, `${name}: 자기 부 캐디 ${opts.required.length}명 모두 출력${lost.length ? " 누락:" + lost.slice(0, 3) : ""}`);
   }
+  return pages;
+}
+
+/** PR 이전: 코스별 배정만 모아 당기고 21행 패딩. 공유 시간축·빈타임 행 없음. */
+function packedBeforeSheet(shared: BoardSheetModel): BoardPrintSheet {
+  const courses = shared.courses.map((course) => {
+    const kept = course.slots.filter((s) => s.state !== "empty");
+    const pad = Array.from({ length: Math.max(0, BOARD_SHEET_BASE_ROWS - kept.length) }, () => ({
+      teeTime: "",
+      state: "empty" as const,
+      caddies: [],
+      teamNames: [],
+    }));
+    return { ...course, slots: [...kept, ...pad] };
+  });
+  return { ...shared, courses, rowCount: Math.max(BOARD_SHEET_BASE_ROWS, ...courses.map((c) => c.slots.length)) };
+}
+
+function redactPublished(raw: DailyBoardPublishedPayloadV1): DailyBoardPublishedPayloadV1 {
+  return {
+    ...raw,
+    publisherUsername: "preview",
+    placements: raw.placements.map((p, i) => {
+      const name = synthName(i + 1);
+      return { ...p, caddyName: name, teamName: null, displayLabel: name };
+    }),
+    sparesByShift: (raw.sparesByShift || []).map((s) => ({
+      ...s,
+      spare1: s.spare1 ? { ...s.spare1, name: "스페어1", displayLabel: "스페어1" } : null,
+      spare2: s.spare2 ? { ...s.spare2, name: "스페어2", displayLabel: "스페어2" } : null,
+    })),
+  };
 }
 
 async function main() {
@@ -294,12 +331,15 @@ async function main() {
     const big = buildBoardPrintSheet(largeDraft(), "1부", { includeTeamName: true });
     await printCase(cdp, "large-multipage-1부", big);
 
-    // 5-b) 4코스 × 21팀 만석 × 1·2·3부 (공유 시간축, 빈칸 유지 → 쪽 수는 21행 압축이 아님)
+    // 5-b) 합성 만석: 코스 시작·간격이 엇갈려 공유 시간축이 21행을 넘으면 2쪽.
+    // 빈타임을 유지해서 2쪽이 되는 것이 아니라, SKY 8분 vs 나머지 7분 합집합 행 수 때문.
     const full = fullLoadDraft();
     for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
       const ownSet = new Set(full.assignments.filter((a) => a.reservation.shift === shift).map((a) => a.caddy.name));
       const otherOnly = full.assignments.filter((a) => a.reservation.shift !== shift).map((a) => a.caddy.name);
-      await printCase(cdp, `full21-${shift}`, buildBoardPrintSheet(full, shift), { forbidden: otherOnly, required: [...ownSet] });
+      const fullSheet = buildBoardPrintSheet(full, shift);
+      const expectPages = fullSheet.rowCount > 21 ? 2 : 1;
+      await printCase(cdp, `full21-${shift}`, fullSheet, { forbidden: otherOnly, required: [...ownSet], pages: expectPages });
     }
     // 5-c) 21팀 초과 (오션 24팀): 잘림 없이 24행
     const over = fullLoadDraft({ overflow: [{ shift: "2부", course: "OCEAN", extra: 3 }] });
@@ -338,6 +378,83 @@ async function main() {
       await load(cdp, publishedBoardHtml(gappedPub, shift), 1440, 900, "screen");
       const pcBoard = await cdp.send("Page.captureScreenshot", { format: "png" });
       writeFileSync(join(OUT, `board-gapped-${shift}-pc.png`), Buffer.from(pcBoard.data, "base64"));
+    }
+
+    // 5-e) 운영 티시트(2026-11-11 형태): 공유 21/18칸 → A4 1쪽. 앞·뒤 빈타임 포함.
+    const ops = operatingTimetableDraft();
+    const opsPub = buildPublishedPayloadFromDraft(ops as unknown as DailyBoardDraftPayloadV1);
+    for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+      const ownSet = new Set(ops.assignments.filter((a) => a.reservation.shift === shift).map((a) => a.caddy.name));
+      const otherOnly = [...new Set(ops.assignments.filter((a) => a.reservation.shift !== shift).map((a) => a.caddy.name))].filter((n) => !ownSet.has(n));
+      const sheet = buildBoardPrintSheet(ops, shift);
+      assert(sheet.rowCount === OPERATING_SHIFT_TIMES[shift].length && sheet.rowCount <= 21, `운영 ${shift}: ${sheet.rowCount}행 ≤ 21`);
+      await printCase(cdp, `operating-${shift}`, sheet, { forbidden: otherOnly, required: [...ownSet], pages: 1 });
+    }
+    const ops3 = buildBoardPrintSheet(ops, "3부");
+    const packed3 = packedBeforeSheet(ops3);
+    await load(cdp, pageHtml(packed3), PRINTABLE_W, PRINTABLE_H, "print");
+    const packedPdf = await cdp.send("Page.printToPDF", { preferCSSPageSize: true, printBackground: true, landscape: true, paperWidth: 11.69, paperHeight: 8.27 });
+    writeFileSync(join(OUT, "operating-3부-before-packed.pdf"), Buffer.from(packedPdf.data, "base64"));
+    if (hasTool("pdftoppm")) execFileSync("pdftoppm", ["-f", "1", "-l", "1", "-r", "110", "-png", "-singlefile", join(OUT, "operating-3부-before-packed.pdf"), join(OUT, "operating-3부-before-packed-p1")]);
+    if (hasTool("pdftotext")) {
+      const packedText = execFileSync("pdftotext", ["-layout", join(OUT, "operating-3부-before-packed.pdf"), "-"]).toString();
+      const afterText = execFileSync("pdftotext", ["-layout", join(OUT, "operating-3부.pdf"), "-"]).toString();
+      assert(afterText.includes("16:33") && afterText.includes("18:32") && afterText.includes("17:08"), "운영 3부 AFTER: 티시트 시작 16:33·종료 18:32·내부 17:08");
+      assert(!afterText.includes("18:46"), "운영 3부 AFTER: 18:46 고정 격자 없음");
+      assert(packed3.courses.find((c) => c.code === "LAKE")!.slots[0].teeTime === "16:40", "BEFORE 패킹: 레이크 첫 행이 첫 배정 16:40으로 당겨짐");
+      assert(ops3.courses.find((c) => c.code === "LAKE")!.slots[0].teeTime === "16:33" && ops3.courses.find((c) => c.code === "LAKE")!.slots[0].state === "empty", "AFTER: 레이크 첫 행은 티시트 16:33 빈칸");
+      assert(packedText.includes("16:40"), "BEFORE 패킹: 배정 시각은 있음");
+    }
+    console.log("[chromium] /board operating empty tees (start–end)");
+    for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+      const times = OPERATING_SHIFT_TIMES[shift];
+      await load(cdp, publishedBoardHtml(opsPub, shift), 390, 844, "screen", true);
+      const probe = await evaluate<{ times: string[]; firstEmpty: string[]; last: string }>(
+        cdp,
+        `(() => {
+          const times = Array.from(document.querySelectorAll("[data-board-time]")).map((el) => el.getAttribute("data-board-time") || "");
+          const first = document.querySelector('[data-board-time="${times[0]}"]');
+          const firstEmpty = first ? Array.from(first.querySelectorAll("[data-board-cell]")).map((el) => el.getAttribute("data-board-cell") || "") : [];
+          return { times, firstEmpty, last: times[times.length - 1] || "" };
+        })()`
+      );
+      assert(probe.times.join() === times.join(), `/board 운영 ${shift} 모바일: ${times[0]}~${times[times.length - 1]} (${times.length}칸)`);
+      assert(probe.last === times[times.length - 1], `/board 운영 ${shift}: 마지막 ${times[times.length - 1]}`);
+      if (shift === "1부") assert(probe.firstEmpty[1] === "empty" && probe.firstEmpty[2] === "empty", "/board 1부 모바일: 06:00 스카이·오션 빈칸");
+      if (shift === "3부") assert(probe.firstEmpty[1] === "empty" && probe.firstEmpty[3] === "empty", "/board 3부 모바일: 16:33 스카이·레이크 빈칸");
+      const shot = await cdp.send("Page.captureScreenshot", { format: "png" });
+      writeFileSync(join(OUT, `board-operating-${shift}-mobile.png`), Buffer.from(shot.data, "base64"));
+      await load(cdp, publishedBoardHtml(opsPub, shift), 1440, 900, "screen");
+      const pcBoard = await cdp.send("Page.captureScreenshot", { format: "png" });
+      writeFileSync(join(OUT, `board-operating-${shift}-pc.png`), Buffer.from(pcBoard.data, "base64"));
+    }
+
+    const legacy = legacySparseThirdShiftDraft();
+    const legacySheet = buildBoardPrintSheet(legacy, "3부");
+    await printCase(cdp, "legacy-no-teesheet-3부", legacySheet, { pages: 1 });
+    assert(legacySheet.courses[0].slots[0].teeTime === "16:40", "레거시 무티시트 3부: 첫 행=배정 min 16:40 (16:33 없음)");
+    assert(!legacySheet.courses.some((c) => c.slots.some((s) => s.teeTime === "16:33" || s.teeTime === "18:46")), "레거시: 티시트 없이 16:33·18:46 발명 없음");
+    const legacyPub = buildPublishedPayloadFromDraft(legacy as unknown as DailyBoardDraftPayloadV1);
+    await load(cdp, publishedBoardHtml(legacyPub, "3부"), 390, 844, "screen", true);
+    const legacyProbe = await evaluate<{ times: string[] }>(cdp, `({ times: Array.from(document.querySelectorAll("[data-board-time]")).map((el) => el.getAttribute("data-board-time") || "") })`);
+    assert(legacyProbe.times[0] === "16:40" && !legacyProbe.times.includes("16:33"), "/board 레거시 3부 모바일: 16:33 없음");
+    const legacyShot = await cdp.send("Page.captureScreenshot", { format: "png" });
+    writeFileSync(join(OUT, "board-legacy-3부-mobile.png"), Buffer.from(legacyShot.data, "base64"));
+
+    for (const date of ["2026-11-10", "2026-11-11"] as const) {
+      const path = `/tmp/published-${date}.json`;
+      if (!existsSync(path)) continue;
+      const raw = redactPublished(JSON.parse(readFileSync(path, "utf8")) as DailyBoardPublishedPayloadV1);
+      const draft = publishedBoardPrintDraft({ selectedDate: date, loading: false, published: { date, payload: raw } });
+      assert(draft != null, `실게시본 ${date}: 인쇄 draft`);
+      for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+        const sheet = buildBoardPrintSheet(draft!, shift);
+        const expectPages = sheet.rowCount > 21 ? 2 : 1;
+        await printCase(cdp, `published-${date}-${shift}`, sheet, { pages: expectPages });
+        await load(cdp, publishedBoardHtml(raw, shift), 390, 844, "screen", true);
+        const shot = await cdp.send("Page.captureScreenshot", { format: "png" });
+        writeFileSync(join(OUT, `board-published-${date}-${shift}-mobile.png`), Buffer.from(shot.data, "base64"));
+      }
     }
 
     // 6) 모바일 미리보기 (390px, screen media, 화면 맞춤 zoom)

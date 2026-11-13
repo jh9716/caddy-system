@@ -579,3 +579,125 @@ export function gappedTimetableDraft(date = "2026-11-18"): AssignmentDraft {
     confirmedAt: null,
   };
 }
+
+function timesEvery7(start: string, count: number): string[] {
+  const [hh, mm] = start.split(":").map(Number);
+  const origin = hh * 60 + mm;
+  return Array.from({ length: count }, (_, i) => hhmm(origin + 7 * i));
+}
+
+/**
+ * 운영 Published 티시트 형태 (2026-11-11·12 확정본 조사).
+ * 날짜마다 길이가 다름 — 16:33~18:46을 전 날짜에 고정하지 않음.
+ * 1부 21칸 06:00~08:20 / 2부 21칸 11:20~13:40 / 3부 18칸 16:33~18:32.
+ * 4코스 동일 시각(공유 시간축). 3부는 배정이 드문 빈타임 포함.
+ */
+export const OPERATING_SHIFT_TIMES: Record<ShiftPart, string[]> = {
+  "1부": timesEvery7("06:00", 21),
+  "2부": timesEvery7("11:20", 21),
+  "3부": timesEvery7("16:33", 18),
+};
+
+/** 2026-11-11 3부 실배정 시각(티시트 18칸 중 12칸). */
+export const OPERATING_THIRD_ASSIGNED_TIMES = [
+  "16:33",
+  "16:40",
+  "16:47",
+  "16:54",
+  "17:01",
+  "17:36",
+  "17:43",
+  "18:04",
+  "18:11",
+  "18:18",
+  "18:25",
+  "18:32",
+] as const;
+
+export function operatingTimetableDraft(date = "2026-11-11"): AssignmentDraft {
+  const rows: AutoAssignmentRow[] = [];
+  const teeSheet: NonNullable<AssignmentDraft["teeSheet"]> = [];
+  let id = 9100;
+  for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+    const times = OPERATING_SHIFT_TIMES[shift];
+    for (const teeTime of times) {
+      for (const course of COURSE_CODES) teeSheet.push({ course, shift, teeTime });
+    }
+    for (const teeTime of times) {
+      for (const course of COURSE_CODES) {
+        if (shift === "1부" && (course === "SKY" || course === "OCEAN") && teeTime === "06:00") {
+          continue;
+        }
+        if (shift === "3부") {
+          if (!(OPERATING_THIRD_ASSIGNED_TIMES as readonly string[]).includes(teeTime)) continue;
+          if (course === "LAKE" && ["16:33", "16:54", "17:01", "18:04", "18:18", "18:25"].includes(teeTime)) {
+            continue;
+          }
+          if (course === "SKY" && ["16:33", "16:54", "17:01", "18:11", "18:18", "18:25", "18:32"].includes(teeTime)) {
+            continue;
+          }
+        }
+        const n = id++;
+        rows.push(
+          printRow({
+            date,
+            shift,
+            course,
+            teeTime,
+            caddyId: n,
+            caddyName: synthName(n),
+            teamName: `${shift}운영팀${course[0]}${teeTime.replace(":", "")}`,
+          })
+        );
+      }
+    }
+  }
+  return {
+    date,
+    status: "DRAFT",
+    assignments: rows,
+    unassignedReservations: [],
+    closedCourseReservations: [],
+    openCourses: [...COURSE_CODES],
+    caddyPool: [],
+    teeSheet,
+    sparesByShift: [],
+    confirmedAt: null,
+  };
+}
+
+/** 2026-11-10처럼 teeSheet 없는 레거시 확정본: 3부 배정 6시각만. */
+export function legacySparseThirdShiftDraft(date = "2026-11-10"): AssignmentDraft {
+  const times = ["16:40", "16:47", "17:01", "17:22", "17:43", "18:04"];
+  const rows: AutoAssignmentRow[] = [];
+  let id = 9200;
+  for (const teeTime of times) {
+    rows.push(
+      printRow({
+        date,
+        shift: "3부",
+        course: "VERTHILL",
+        teeTime,
+        caddyId: id++,
+        caddyName: synthName(id),
+      })
+    );
+  }
+  rows.push(
+    printRow({ date, shift: "3부", course: "SKY", teeTime: "16:40", caddyId: id++, caddyName: synthName(id) }),
+    printRow({ date, shift: "3부", course: "SKY", teeTime: "17:43", caddyId: id++, caddyName: synthName(id) }),
+    printRow({ date, shift: "3부", course: "OCEAN", teeTime: "17:22", caddyId: id++, caddyName: synthName(id) }),
+    printRow({ date, shift: "3부", course: "OCEAN", teeTime: "18:04", caddyId: id++, caddyName: synthName(id) })
+  );
+  return {
+    date,
+    status: "DRAFT",
+    assignments: rows,
+    unassignedReservations: [],
+    closedCourseReservations: [],
+    openCourses: [...COURSE_CODES],
+    caddyPool: [],
+    sparesByShift: [],
+    confirmedAt: null,
+  };
+}
