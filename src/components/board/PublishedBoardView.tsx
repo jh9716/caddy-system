@@ -143,8 +143,8 @@ export default function PublishedBoardView({
   payload: DailyBoardPublishedPayloadV1;
   shift: ShiftPart;
 }) {
-  // 시간축 = 운영 티시트 ∪ 확정 배정 시각. 계산으로 만든 사이 시각은 넣지 않는다.
-  const board = buildPublishedShiftBoard(payload, shift, { fillInterior: false });
+  // 시간축 = 부 전체 티타임(운영 티시트 ∪ 확정 배정 ∪ 내부 공석 보간). 빈타임도 행을 유지한다.
+  const board = buildPublishedShiftBoard(payload, shift);
   const counts = countPublishedCourseTeams(board);
   const totalAssigned = COURSE_CODES.reduce((n, code) => n + counts[code].teams, 0);
   const totalVacant = COURSE_CODES.reduce((n, code) => n + counts[code].vacant, 0);

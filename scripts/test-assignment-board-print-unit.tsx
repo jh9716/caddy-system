@@ -1,6 +1,6 @@
 /**
  * 배치표 공통 시트(/board·PNG·A4·XLSX) 단위 테스트.
- * 부 분리, 4코스 순서, 코스별 21팀 행, 21팀 초과 잘림 없음, 코스별 실제 시각, 빈/휴장/미배치,
+ * 부 분리, 4코스 순서, 공유 시간축(빈타임 행 유지), 21팀 초과 잘림 없음, 빈/휴장/미배치,
  * 예약자명 범위, 다른 날짜 차단, 엑셀 행·열 구조. DB/네트워크 없음.
  * 실행: npm run test:assignment-board-print-unit
  */
@@ -44,7 +44,12 @@ import {
   emptyAndUnassignedDraft,
   fullLoadDraft,
   fullLoadTeeTime,
+  GAPPED_SHIFT_TIMES,
+  gappedTimetableDraft,
   largeDraft,
+  legacySparseThirdShiftDraft,
+  OPERATING_SHIFT_TIMES,
+  operatingTimetableDraft,
   richMobileDraft,
   threeShiftDraft,
 } from "./fixtures/boardPrintFixtures";
@@ -90,7 +95,9 @@ for (const shift of BOARD_PRINT_SHIFTS) {
   assert(h.includes(`data-print-shift="${shift}"`) && h.includes(`data-sheet-shift="${shift}"`), `${shift}: 부 라벨`);
   const heads = (h.match(/data-sheet-course-head="(VERTHILL|SKY|OCEAN|LAKE)"/g) || []);
   assert(heads.join("|") === COURSE_CODES.map((c) => `data-sheet-course-head="${c}"`).join("|"), `${shift}: 코스 순서 베르힐·스카이·오션·레이크`);
-  assert(sheet.rowCount === 21 && (h.match(/data-sheet-row="/g) || []).length === 21, `${shift}: 팀 수가 적어도 21행 고정`);
+  const times = [...new Set(own.map((a) => a.reservation.teeTime))].sort();
+  assert(sheet.rowCount === times.length && (h.match(/data-sheet-row="/g) || []).length === times.length, `${shift}: 행 수 = 시간표 ${times.length} (21 패딩 없음)`);
+  assert(sheet.courses.filter((c) => c.open).every((c) => c.slots.every((s, i) => s.teeTime === times[i])), `${shift}: 열린 코스 모두 같은 시간축`);
 }
 assert(JSON.stringify(draft) === before, "모델 생성 후 원본 draft 불변");
 
@@ -111,39 +118,45 @@ const sky = empty.courses.find((c) => c.code === "SKY")!;
 const ocean = empty.courses.find((c) => c.code === "OCEAN")!;
 const lake = empty.courses.find((c) => c.code === "LAKE")!;
 assert(!sky.open && sky.slots.length === 0, "스카이 휴장 (칸 없음)");
-assert(ocean.open && ocean.teams === 0 && ocean.slots.length === 0, "오션 열림·예약 0 → 빈 칸");
+assert(ocean.open && ocean.teams === 0 && ocean.slots.length === empty.rowCount, "오션 열림·예약 0 → 시간축 빈칸 유지");
+assert(ocean.slots.every((s) => s.state === "empty"), "오션: 모든 슬롯 empty");
 assert(lake.unassigned === 2, "레이크 미배치 2 (미배치 예약 1 + 빈 캐디 칸 1)");
+assert(empty.courses.filter((c) => c.open).every((c) => c.slots.length === empty.rowCount), "열린 코스 행 수 = 공유 시간축");
 const eh = html(empty);
 assert(eh.includes("휴장") && eh.includes("예약 없음"), "휴장/예약 없음 헤더");
 assert((eh.match(/>미배치</g) || []).length === 3, "미배치 칸 3개 (레이크 2 + 베르힐 12:12)");
-assert((eh.match(/data-sheet-cell="closed"/g) || []).length === 21 * 3, "휴장 코스: 21행 × 3칸 빗금");
+assert((eh.match(/data-sheet-cell="closed"/g) || []).length === empty.rowCount * 3, `휴장 코스: ${empty.rowCount}행 × 3칸 빗금`);
 assert(eh.includes("미배치합성팀"), "미배치 예약자명 (옵션 ON)");
 assert(!eh.includes("undefined") && !eh.includes("null"), "undefined/null 문자열 없음");
 const none = buildBoardPrintSheet(emptyAndUnassignedDraft(), "1부");
-assert(none.isEmpty && none.rowCount === 21, "데이터 없는 부: 빈 21행");
+assert(none.isEmpty && none.rowCount === 0, "데이터 없는 부: 시간표 0행");
 assert(html(none).includes("1부 배치 없음"), "데이터 없는 부: '1부 배치 없음'");
 
-console.log("[21팀] 4코스 × 21팀 × 1·2·3부 만석");
+console.log("[21팀] 4코스 × 21팀 × 1·2·3부 만석 (공유 시간축)");
 const full = fullLoadDraft();
 for (const shift of BOARD_PRINT_SHIFTS) {
   const m = buildBoardSheetModel(full, shift);
-  assert(m.rowCount === 21 && m.overflowCourses.length === 0, `${shift}: 21행, 초과 없음`);
-  assert(m.courses.every((c) => c.slots.length === 21 && c.assigned === 21), `${shift}: 코스마다 21팀 배정`);
+  assert(m.overflowCourses.length === 0, `${shift}: 팀 21 이하, 초과 없음`);
+  assert(m.courses.every((c) => c.slots.length === m.rowCount && c.assigned === 21), `${shift}: 코스마다 시간축 ${m.rowCount}행 · 배정 21팀`);
   assert(m.totals.assigned === 84, `${shift}: 84팀`);
-  const exact = m.courses.every((c) => c.slots.every((s, i) => s.teeTime === fullLoadTeeTime(shift, c.code, i)));
-  assert(exact, `${shift}: 코스별 실제 시각 그대로 (스카이 8분·시작 엇갈림)`);
+  const axis = m.courses[0].slots.map((s) => s.teeTime);
+  assert(m.courses.every((c) => c.slots.every((s, i) => s.teeTime === axis[i])), `${shift}: 열린 코스 모두 같은 시각 행`);
   const own = new Set(full.assignments.filter((a) => a.reservation.shift === shift).map((a) => a.caddy.name));
   const names = caddyNames(m);
   assert(names.length === 84 && names.every((n) => own.has(n)), `${shift}: 다른 부 섞임 없음`);
   const h = html(m);
   const sky1 = fullLoadTeeTime(shift, "SKY", 1);
   const vh1 = fullLoadTeeTime(shift, "VERTHILL", 1);
-  assert(h.includes(`data-sheet-course="SKY" data-sheet-time="${sky1}"`) && h.includes(`data-sheet-course="VERTHILL" data-sheet-time="${vh1}"`), `${shift}: 같은 2행에 코스별 다른 시각 (${vh1} / ${sky1})`);
+  const skyIdx = axis.indexOf(sky1);
+  const vhIdx = axis.indexOf(vh1);
+  assert(sky1 !== vh1 && skyIdx !== vhIdx && skyIdx >= 0 && vhIdx >= 0, `${shift}: 엇갈린 시각은 다른 행 (${vh1} vs ${sky1})`);
+  assert(m.courses.find((c) => c.code === "VERTHILL")!.slots[skyIdx].state === "empty", `${shift}: 스카이 ${sky1} 행에서 베르힐은 빈칸`);
+  assert(h.includes(`data-sheet-course="SKY" data-sheet-time="${sky1}"`) && h.includes(`data-sheet-course="VERTHILL" data-sheet-time="${vh1}"`), `${shift}: 두 시각 모두 표시`);
 }
 {
   const m = buildBoardSheetModel(full, "1부");
   const allTimes = new Set(m.courses.flatMap((c) => c.slots.map((s) => s.teeTime)));
-  assert(allTimes.size > 21, `공통 시간축이면 ${allTimes.size}행 필요 → 코스별 시각 열 방식 채택 근거`);
+  assert(m.rowCount === allTimes.size && allTimes.size > 21, `엇갈린 코스 시각은 공유 시간축 ${allTimes.size}행 (압축하지 않음)`);
 }
 
 console.log("[21팀 초과] 잘림 없음");
@@ -151,16 +164,16 @@ const over = fullLoadDraft({ overflow: [{ shift: "2부", course: "OCEAN", extra:
 {
   const m = buildBoardSheetModel(over, "2부");
   const oc = m.courses.find((c) => c.code === "OCEAN")!;
-  assert(m.rowCount === 24 && oc.slots.length === 24 && oc.overflow, "오션 24팀 → 24행 (잘림 없음)");
+  assert(oc.assigned === 24 && oc.slots.length === m.rowCount && oc.overflow, "오션 24팀 → 시간축 유지, 잘림 없음");
   assert(m.overflowCourses.join(",") === "OCEAN", "초과 코스 표시 = 오션");
   const h = html(m);
-  assert(h.includes("data-sheet-overflow") && h.includes("21팀 초과 24행"), "상단 초과 경고 표시");
-  assert(h.includes("24행(21 초과)"), "코스 헤더에 초과 표시");
-  assert((h.match(/bs-row-over/g) || []).length === 3, "22~24행 강조");
+  assert(h.includes("data-sheet-overflow") && h.includes("21팀 초과"), "상단 초과 경고 표시");
+  assert(h.includes("21 초과"), "코스 헤더에 초과 표시");
+  assert((h.match(/bs-row-over/g) || []).length >= 3, "오션 22번째 팀 이후 행 강조");
   assert(h.includes(fullLoadTeeTime("2부", "OCEAN", 23)), "마지막(24번째) 팀 시각 표시");
   assert(caddyNames(m).length === 87, "87명 모두 표시");
   const other = buildBoardSheetModel(over, "1부");
-  assert(other.rowCount === 21 && other.overflowCourses.length === 0, "다른 부는 영향 없음 (21행)");
+  assert(other.overflowCourses.length === 0 && other.courses.every((c) => c.assigned === 21), "다른 부는 영향 없음");
 }
 {
   const big = buildBoardPrintSheet(largeDraft(), "1부");
@@ -172,12 +185,115 @@ console.log("[빈 티] 실제 티시트의 빈 티 = 시각 + 빈 칸");
   const d = fullLoadDraft({ emptyTees: [{ shift: "3부", course: "LAKE", index: 5 }] });
   const m = buildBoardSheetModel(d, "3부");
   const lk = m.courses.find((c) => c.code === "LAKE")!;
-  assert(lk.slots[5].state === "empty" && lk.slots[5].teeTime === fullLoadTeeTime("3부", "LAKE", 5), "빈 티: 실제 시각 유지, 캐디 빈칸");
+  const emptyTime = fullLoadTeeTime("3부", "LAKE", 5);
+  const slot = lk.slots.find((s) => s.teeTime === emptyTime);
+  assert(slot?.state === "empty" && slot.teeTime === emptyTime, "빈 티: 실제 시각 유지, 캐디 빈칸");
+  assert(lk.slots.map((s) => s.teeTime).join() === m.courses[0].slots.map((s) => s.teeTime).join(), "레이크 빈 티가 있어도 행을 당기지 않음");
   assert(lk.assigned === 20 && lk.teams === 20, "빈 티는 팀 수에 미포함");
-  // 티시트에 없는 보간 시각은 만들지 않음
-  const noSheet = { ...threeShiftDraft(), teeSheet: undefined };
-  const m2 = buildBoardSheetModel(noSheet, "1부");
-  assert(m2.courses.every((c) => c.slots.every((s) => s.state !== "empty")), "티시트 없으면 빈 시각을 만들지 않음");
+}
+
+console.log("[빈타임 시간축] 1·2·3부 공유 격자 · 코스별 압축 금지");
+{
+  const d = gappedTimetableDraft();
+  const before = JSON.stringify(d);
+  for (const shift of BOARD_PRINT_SHIFTS) {
+    const times = GAPPED_SHIFT_TIMES[shift];
+    const m = buildBoardSheetModel(d, shift);
+    const h = html(m);
+    assert(m.rowCount === times.length, `${shift}: 행 수 = 시간표 ${times.length}`);
+    assert(m.courses.every((c) => c.open && c.slots.length === times.length), `${shift}: 4코스 모두 같은 행 수`);
+    assert(m.courses.every((c) => c.slots.every((s, i) => s.teeTime === times[i])), `${shift}: 코스 행 = 공유 시각 (당김 없음)`);
+    const emptyAll = m.courses.map((c) => c.slots[2]);
+    assert(emptyAll.every((s) => s.state === "empty" && s.teeTime === times[2]), `${shift}: ${times[2]} 전원 빈칸, 행 유지`);
+    assert((h.match(new RegExp(`data-sheet-time="${times[2]}"`, "g")) || []).length >= 8, `${shift}: 빈타임 ${times[2]} HTML 행 유지`);
+    const lakeAt3 = m.courses.find((c) => c.code === "LAKE")!.slots[3];
+    assert(lakeAt3.state === "empty" && lakeAt3.teeTime === times[3], `${shift}: 레이크 ${times[3]} 빈칸`);
+    assert(["VERTHILL", "SKY", "OCEAN"].every((code) => m.courses.find((c) => c.code === code)!.slots[3].state === "assigned"), `${shift}: 다른 코스 ${times[3]} 배정 — 레이크만 빈칸`);
+    if (shift === "3부") {
+      const lake = m.courses.find((c) => c.code === "LAKE")!;
+      assert(lake.assigned === 0 && lake.teams === 0 && lake.slots.every((s) => s.state === "empty"), "3부 레이크 0팀 · 6행 전부 빈칸");
+      assert(h.includes("예약 없음"), "3부 레이크 헤더 '예약 없음'");
+    }
+    assert(m.totals.assigned === d.assignments.filter((a) => a.reservation.shift === shift).length, `${shift}: 전체 배정 팀 수 불변`);
+  }
+  {
+    const hole = GAPPED_SHIFT_TIMES["1부"][2];
+    const stripped = {
+      ...d,
+      teeSheet: (d.teeSheet || []).filter((s) => !(s.shift === "1부" && s.teeTime === hole)),
+    };
+    const m = buildBoardSheetModel(stripped, "1부");
+    assert(m.courses[0].slots.some((s) => s.teeTime === hole && s.state === "empty"), `티시트에 없어도 내부 공석 보간으로 ${hole} 행 유지`);
+  }
+  {
+    const pub = buildPublishedPayloadFromDraft(d as unknown as DailyBoardDraftPayloadV1);
+    for (const shift of BOARD_PRINT_SHIFTS) {
+      const times = GAPPED_SHIFT_TIMES[shift];
+      const board = buildPublishedShiftBoard(pub, shift);
+      const h = renderToStaticMarkup(<PublishedBoardView payload={pub} shift={shift} />);
+      assert(board.map((r) => r.teeTime).join() === times.join(), `/board ${shift}: 시간축 ${times.join(",")}`);
+      assert(board[2].cells.VERTHILL.kind === "empty" && board[2].cells.LAKE.kind === "empty", `/board ${shift}: ${times[2]} 빈칸`);
+      assert((h.match(/data-board-time="/g) || []).length === times.length, `/board ${shift}: HTML 행 = 시간표`);
+      assert(h.includes(`data-board-time="${times[2]}"`), `/board ${shift}: 빈타임 ${times[2]} 행 표시`);
+      if (shift === "3부") {
+        assert(board.every((r) => r.cells.LAKE.kind === "empty"), "/board 3부: 레이크 전 행 빈칸");
+        assert(/data-board-course-teams="0">배정 0팀</.test(h), "/board 3부 레이크 0팀");
+      }
+    }
+  }
+  assert(JSON.stringify(d) === before, "빈타임 모델 생성 후 draft 불변");
+}
+
+console.log("[운영 티시트] 2026-11-11 형태 · 부별 시작~종료 · 앞뒤 빈타임");
+{
+  const d = operatingTimetableDraft();
+  const pub = buildPublishedPayloadFromDraft(d as unknown as DailyBoardDraftPayloadV1);
+  for (const shift of BOARD_PRINT_SHIFTS) {
+    const times = OPERATING_SHIFT_TIMES[shift];
+    const m = buildBoardSheetModel(d, shift);
+    const board = buildPublishedShiftBoard(pub, shift);
+    assert(m.rowCount === times.length, `${shift}: 행 수 = 티시트 ${times.length} (${times[0]}~${times[times.length - 1]})`);
+    assert(m.courses.every((c) => c.slots.every((s, i) => s.teeTime === times[i])), `${shift}: 4코스 공유 시간축 (압축 없음)`);
+    assert(board.map((r) => r.teeTime).join() === times.join(), `/board ${shift}: 티시트 시작~종료`);
+    assert(m.overflowCourses.length === 0, `${shift}: 21팀 이하`);
+  }
+  {
+    const m3 = buildBoardSheetModel(d, "3부");
+    const times = OPERATING_SHIFT_TIMES["3부"];
+    assert(m3.rowCount === 18 && times[0] === "16:33" && times[17] === "18:32", "3부 티시트 18칸 16:33~18:32 (18:46 고정 아님)");
+    assert(m3.courses[0].slots[0].teeTime === "16:33", "3부 첫 행 = 티시트 시작 16:33");
+    assert(m3.courses[0].slots[17].teeTime === "18:32", "3부 마지막 행 = 티시트 종료 18:32");
+    const hole = m3.courses.map((c) => c.slots.find((s) => s.teeTime === "17:08"));
+    assert(hole.every((s) => s?.state === "empty"), "3부 17:08 티시트 빈타임 유지");
+    assert(m3.courses.find((c) => c.code === "LAKE")!.slots[0].state === "empty", "3부 레이크: 티시트 시작 16:33은 첫 배정 앞 빈타임");
+    assert(m3.courses.find((c) => c.code === "SKY")!.slots[0].state === "empty", "3부 스카이: 티시트 시작 16:33은 첫 배정 앞 빈타임");
+    assert(!m3.courses.some((c) => c.slots.some((s) => s.teeTime === "18:46")), "다른 날짜의 18:46을 만들지 않음");
+    const h = html(m3);
+    assert(h.includes('data-sheet-time="16:33"') && h.includes('data-sheet-time="18:32"') && h.includes('data-sheet-time="17:08"'), "인쇄 3부: 시작·종료·내부 빈타임");
+    const ph = renderToStaticMarkup(<PublishedBoardView payload={pub} shift={"3부" as ShiftPart} />);
+    assert(ph.includes('data-board-time="16:33"') && ph.includes('data-board-time="18:32"') && ph.includes('data-board-time="17:08"'), "/board 3부: 시작·종료·내부 빈타임");
+  }
+  {
+    const m1 = buildBoardSheetModel(d, "1부");
+    assert(m1.rowCount === 21 && m1.courses[0].slots[0].teeTime === "06:00" && m1.courses[0].slots[20].teeTime === "08:20", "1부 21칸 06:00~08:20");
+    assert(m1.courses.find((c) => c.code === "SKY")!.slots[0].state === "empty", "1부 스카이 06:00: 티시트 시작·첫 배정(06:07) 앞 빈타임");
+    assert(m1.courses.find((c) => c.code === "OCEAN")!.slots[0].state === "empty", "1부 오션 06:00: 티시트 시작·첫 배정(06:07) 앞 빈타임");
+    const m2 = buildBoardSheetModel(d, "2부");
+    assert(m2.rowCount === 21 && m2.courses[0].slots[0].teeTime === "11:20" && m2.courses[0].slots[20].teeTime === "13:40", "2부 21칸 11:20~13:40");
+  }
+}
+
+console.log("[레거시 무티시트] 2026-11-10 형태 · 앞뒤 연장 없음");
+{
+  const d = legacySparseThirdShiftDraft();
+  const m = buildBoardSheetModel(d, "3부");
+  const times = m.courses[0].slots.map((s) => s.teeTime);
+  assert(times[0] === "16:40" && times[times.length - 1] === "18:04", "티시트 없으면 첫·끝 = 배정 min~max");
+  assert(times.includes("16:54") && times.includes("17:08"), "내부 7분 공석은 보간");
+  assert(!times.includes("16:33") && !times.includes("18:11") && !times.includes("18:46"), "배정 앞·뒤 빈타임은 티시트 없이 만들지 않음");
+  const pub = buildPublishedPayloadFromDraft(d as unknown as DailyBoardDraftPayloadV1);
+  const board = buildPublishedShiftBoard(pub, "3부");
+  assert(board[0].teeTime === "16:40" && !board.some((r) => r.teeTime === "16:33"), "/board도 티시트 없으면 16:33 없음");
 }
 
 
@@ -194,11 +310,11 @@ console.log("[/board 시간축] 운영 PublishedBoardView 방식 (시각 행 × 
   // 4코스 만석 × 1·2·3부
   const fp = pubOf(fullLoadDraft({ emptyTees: [{ shift: "3부", course: "LAKE", index: 5 }] }));
   for (const shift of BOARD_PRINT_SHIFTS) {
-    const board = buildPublishedShiftBoard(fp, shift, { fillInterior: false });
+    const board = buildPublishedShiftBoard(fp, shift);
     const times = board.map((r) => r.teeTime);
     assert(times.length > 21 && times.join() === [...times].sort().join() && new Set(times).size === times.length, `${shift}: 시간축 ${times.length}행 (21행 강제 없음, 정렬·중복 없음)`);
     const real = realTimes(fp, shift);
-    assert(times.every((t) => real.has(t)), `${shift}: 모든 행 = 실제 티시트/배정 시각 (계산으로 만든 시각 없음)`);
+    assert(times.every((t) => real.has(t)), `${shift}: 만석 티시트는 보간 없이 실제 시각만`);
     assert([...real].every((t) => times.includes(t)), `${shift}: 티시트 시각 누락 없음`);
     const placed = board.flatMap((r) => COURSE_CODES.flatMap((c) => { const cell = r.cells[c]; return cell.kind === "assigned" ? cell.placements.map((p) => `${c}|${r.teeTime}|${p.caddyId}`) : []; }));
     const own = fp.placements.filter((p) => p.shift === shift).map((p) => `${p.course}|${p.teeTime}|${p.caddyId}`);
@@ -211,7 +327,7 @@ console.log("[/board 시간축] 운영 PublishedBoardView 방식 (시각 행 × 
     assert(COURSE_CODES.every((c, i) => h.includes(`data-board-course-teams="${expect[i]}">배정 ${expect[i]}팀<`)), `${shift}: 머리글 '배정 N팀' 표시`);
   }
   {
-    const b3 = buildPublishedShiftBoard(fp, "3부", { fillInterior: false });
+    const b3 = buildPublishedShiftBoard(fp, "3부");
     const t = fullLoadTeeTime("3부", "LAKE", 5);
     const row = b3.find((r) => r.teeTime === t);
     assert(row && row.cells.LAKE.kind === "empty", `빈 티 ${t}: 티시트 시각 유지, 레이크 칸 비움 (팀 수 미포함)`);
@@ -219,7 +335,7 @@ console.log("[/board 시간축] 운영 PublishedBoardView 방식 (시각 행 × 
   // 21팀 초과
   const op = pubOf(fullLoadDraft({ overflow: [{ shift: "1부", course: "LAKE", extra: 3 }] }));
   {
-    const c = countPublishedCourseTeams(buildPublishedShiftBoard(op, "1부", { fillInterior: false }));
+    const c = countPublishedCourseTeams(buildPublishedShiftBoard(op, "1부"));
     const h = pv(op, "1부");
     assert(c.LAKE.teams === 24 && h.includes('bh-count over" data-board-course-teams="24">배정 24팀<'), "레이크 24팀: 잘림 없이 '배정 24팀' (21 초과 강조)");
     assert(h.includes(fullLoadTeeTime("1부", "LAKE", 23)), "24번째 팀 시각 표시");
@@ -238,8 +354,8 @@ console.log("[/board 시간축] 운영 PublishedBoardView 방식 (시각 행 × 
     const base = pubOf(threeShiftDraft("2026-11-12"));
     const first = base.placements.find((p) => p.shift === "1부")!;
     const two = { ...base, placements: [...base.placements, { ...first, caddyId: 99901, caddyName: "둘째캐디" }] };
-    const c1 = countPublishedCourseTeams(buildPublishedShiftBoard(base, "1부", { fillInterior: false }));
-    const c2 = countPublishedCourseTeams(buildPublishedShiftBoard(two, "1부", { fillInterior: false }));
+    const c1 = countPublishedCourseTeams(buildPublishedShiftBoard(base, "1부"));
+    const c2 = countPublishedCourseTeams(buildPublishedShiftBoard(two, "1부"));
     const code = first.course as (typeof COURSE_CODES)[number];
     assert(c2[code].teams === c1[code].teams && c2[code].caddies === c1[code].caddies + 1, "2인 캐디 팀: 팀 수 1, 캐디 수 2");
     assert(pv(two, "1부").includes("둘째캐디"), "2인 캐디 모두 표시");
@@ -266,8 +382,8 @@ console.log("[/board 시간축] 운영 PublishedBoardView 방식 (시각 행 × 
     const caddy = pv(publishedPayloadForReader(rp, "caddy"), "1부");
     assert(/1부예약/.test(admin) && !/[123]부예약/.test(caddy), "예약자명: 관리자 표시 / 캐디 미표시 (서버 redaction 그대로)");
     assert(caddy.includes("남궁가나다라마"), "캐디 응답: 캐디명 표시");
-    const ca = countPublishedCourseTeams(buildPublishedShiftBoard(publishedPayloadForReader(rp, "admin"), "1부", { fillInterior: false }));
-    const cc = countPublishedCourseTeams(buildPublishedShiftBoard(publishedPayloadForReader(rp, "caddy"), "1부", { fillInterior: false }));
+    const ca = countPublishedCourseTeams(buildPublishedShiftBoard(publishedPayloadForReader(rp, "admin"), "1부"));
+    const cc = countPublishedCourseTeams(buildPublishedShiftBoard(publishedPayloadForReader(rp, "caddy"), "1부"));
     assert(JSON.stringify(ca) === JSON.stringify(cc), "팀 수: 관리자·캐디 응답 동일");
   }
   // 운영 기본(보간) 동작은 다른 호출자용으로 유지
@@ -298,13 +414,18 @@ console.log("[XLSX] 같은 행·열 구조");
   const aoa = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "" });
   assert(String(aoa[BOARD_XLSX_HEADER_ROW][0]) === "No" && String(aoa[BOARD_XLSX_HEADER_ROW][1]) === "베르힐" && String(aoa[BOARD_XLSX_HEADER_ROW][10]) === "레이크", "헤더: No | 베르힐(3칸) … 레이크(3칸)");
   assert(String(aoa[BOARD_XLSX_SUBHEADER_ROW][1]) === "시각" && String(aoa[BOARD_XLSX_SUBHEADER_ROW][2]) === "캐디" && String(aoa[BOARD_XLSX_SUBHEADER_ROW][3]) === "비고", "부 헤더: 시각/캐디/비고");
-  assert(aoa.length - BOARD_XLSX_DATA_START_ROW === 24, "2부 엑셀 24행 (초과 잘림 없음)");
-  assert(String(aoa[BOARD_XLSX_DATA_START_ROW + 1][4]) === fullLoadTeeTime("2부", "SKY", 1), "엑셀 2행 스카이 시각 = 실제 시각");
+  const overModel = buildBoardSheetModel(over, "2부");
+  assert(aoa.length - BOARD_XLSX_DATA_START_ROW === overModel.rowCount, `2부 엑셀 ${overModel.rowCount}행 (시간축, 잘림 없음)`);
+  const skyTimeCol = 4;
+  const skyAssignedTimes = overModel.courses.find((c) => c.code === "SKY")!.slots.filter((s) => s.state === "assigned").map((s) => s.teeTime);
+  const excelSkyTimes = aoa.slice(BOARD_XLSX_DATA_START_ROW).map((r) => String(r[skyTimeCol]));
+  assert(excelSkyTimes[0] === String(aoa[BOARD_XLSX_DATA_START_ROW][1]), "엑셀 1행: 열린 코스 시각이 같음 (압축 없음)");
+  assert(excelSkyTimes.includes(skyAssignedTimes[1]), "엑셀에 스카이 두 번째 배정 시각 있음");
   assert(Array.isArray(ws["!merges"]) && ws["!merges"]!.length >= 9, "제목·코스 병합");
   assert(Array.isArray(ws["!cols"]) && ws["!cols"]!.length === 13 && Array.isArray(ws["!rows"]), "열 너비·행 높이 지정 (No+4×3)");
   const ws1 = wb.Sheets["1부"];
   const aoa1 = XLSX.utils.sheet_to_json<unknown[]>(ws1, { header: 1, defval: "" });
-  assert(aoa1.length - BOARD_XLSX_DATA_START_ROW === 21, "1부 엑셀 21행");
+  assert(aoa1.length - BOARD_XLSX_DATA_START_ROW === buildBoardSheetModel(over, "1부").rowCount, "1부 엑셀 행 수 = 시간축");
   const parsed = await parseBoardExportWorkbook(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer);
   const p2 = parsed.find((s) => s.name === "2부")!;
   const oceanCount = p2.rows.filter((r) => r.values.OCEAN).length;
@@ -331,6 +452,30 @@ console.log("[XLSX] 같은 행·열 구조");
   assert(/<border><left style="thin">/.test(st) && /<c r="C7" s="6"/.test(s1) && /<c r="B5" s="3"/.test(s1), "엑셀: 테두리·머리글 음영·굵은 이름 서식");
   const reparsed = await parseBoardExportWorkbook(bytes);
   assert(reparsed.find((x) => x.name === "2부")!.rows.filter((r) => r.values.OCEAN).length === 24, "서식 적용 후에도 다시 읽기 정상 (편집 가능 값 유지)");
+  const gapped = gappedTimetableDraft();
+  const gbytes = await writeBoardExportXlsxBytes(gapped);
+  const gsheets = await parseBoardExportWorkbook(gbytes);
+  for (const shift of BOARD_PRINT_SHIFTS) {
+    const times = GAPPED_SHIFT_TIMES[shift];
+    const sheet = gsheets.find((s) => s.name === shift)!;
+    assert(times.every((t) => sheet.rows.some((r) => r.teeTime === t)), `xlsx ${shift}: 빈타임 포함 시각 ${times.join(",")}`);
+    const hole = sheet.rows.find((r) => r.teeTime === times[2])!;
+    assert(COURSE_CODES.every((c) => !String(hole.values[c] || "").trim()), `xlsx ${shift}: ${times[2]} 캐디 칸 비움`);
+    const gaoa = XLSX.utils.sheet_to_json<unknown[]>(
+      (await buildBoardExportWorkbook(gapped)).Sheets[shift],
+      { header: 1, defval: "" }
+    );
+    assert(gaoa.length - BOARD_XLSX_DATA_START_ROW === times.length, `xlsx ${shift}: 행 수 = 시간표 ${times.length} (압축 없음)`);
+  }
+  const ops = operatingTimetableDraft();
+  const opsSheets = await parseBoardExportWorkbook(await writeBoardExportXlsxBytes(ops));
+  for (const shift of BOARD_PRINT_SHIFTS) {
+    const times = OPERATING_SHIFT_TIMES[shift];
+    const sheet = opsSheets.find((s) => s.name === shift)!;
+    assert(sheet.rows[0].teeTime === times[0] && sheet.rows.at(-1)?.teeTime === times[times.length - 1], `xlsx 운영 ${shift}: ${times[0]}~${times[times.length - 1]}`);
+    assert(sheet.rows.length === times.length, `xlsx 운영 ${shift}: ${times.length}행 (21팀 압축/패딩 없음)`);
+  }
+  assert(opsSheets.find((s) => s.name === "3부")!.rows.some((r) => r.teeTime === "17:08" && !String(r.values.VERTHILL || "").trim()), "xlsx 3부: 17:08 빈타임");
 }
 }
 
@@ -361,7 +506,7 @@ console.log("[현장형] 투근무 배지 · 노란 배경 없음 · 비고 빈 
   const lockH = html(buildBoardSheetModel(rich, "1부", { showLock: true }));
   assert(lockH.includes(">LOCK<"), "인쇄: showLock 이면 LOCK 표시 (기본 출력은 기존처럼 숨김)");
   // 비고 빈 열 (21행 × 4코스, 내용 없음)
-  assert((h2.match(/data-sheet-remark="/g) || []).length === 21 * 4, "비고 칸 21×4");
+  assert((h2.match(/data-sheet-remark="/g) || []).length === m2.rowCount * 4, `비고 칸 ${m2.rowCount}×4`);
   assert(!/data-sheet-remark="[^"]+"[^>]*>[^<\s]/.test(h2), "비고 칸은 비어 있음");
   assert(h2.includes(">비고<"), "헤더 '비고'");
   // 하단 바: 실제 계산, 84 고정 아님

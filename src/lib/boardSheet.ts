@@ -2,10 +2,11 @@
  * 배치표 공통 시트 모델 (읽기 전용).
  * /board 화면 · 이미지(PNG) · A4 인쇄(PDF) · 엑셀(XLSX)이 모두 이 모델 하나로 같은 표를 그린다.
  *
- * 표 구조: 행 = 코스 안에서의 팀 순번(1..21), 열 = 코스마다 [시각 | 캐디 | 비고(빈 칸, 저장 없음)].
- *  - 코스별 실제 티오프 시각을 각 칸에 그대로 쓴다 (코스 간 시각을 맞추거나 만들지 않음).
- *  - 시각 출처: 운영 티시트(예약 엑셀의 실제 티 행) ∪ 예약(배정·미배치). 보간으로 만든 시각은 쓰지 않는다.
- *  - 기본 21행(코스별 최대 21팀 운영). 21을 넘으면 행을 늘리고 overflow 로 표시 (절대 자르지 않음).
+ * 표 구조: 행 = 부 시간표의 티타임(빈타임 포함), 열 = 코스마다 [시각 | 캐디 | 비고(빈 칸, 저장 없음)].
+ *  - 시간축은 운영 티시트 ∪ 예약(배정·미배치) ∪ 코스별 내부 공석 보간. 코스별로 배정만 모아 당기지 않는다.
+ *  - 각 코스는 그 시각에 배정/미배치가 있으면 표시하고, 없으면 빈칸. 다른 코스 배정 때문에 행이 올라가지 않는다.
+ *  - 행 수 = 그 부의 시간 슬롯 수. 21행으로 패딩하지 않는다.
+ *  - overflow = 배정+미배치 팀이 21을 넘는 코스(잘림 없음). 빈타임 행은 팀으로 세지 않는다.
  *  - 배정 = 캐디가 1명 이상 있는 팀. 미배치 = 예약 칸은 있으나 캐디 없음.
  *    한계: 게시본(Published)에는 미배정 예약 목록이 없다. 칸 자체가 없는 예약은 세지 못한다
  *    (assignmentDraftFromPublishedPayload 가 unassignedReservations 를 빈 배열로 둔다).
@@ -116,11 +117,11 @@ export type BoardSheetCourse = {
   label: string;
   open: boolean;
   slots: BoardSheetSlot[];
-  /** 예약 팀 수 (배정 + 미배치) */
+  /** 예약 팀 수 (배정 + 미배치). 빈타임은 세지 않음 */
   teams: number;
   assigned: number;
   unassigned: number;
-  /** 행(슬롯) 수가 21 초과 */
+  /** 배정+미배치 팀이 21 초과 */
   overflow: boolean;
 };
 
@@ -130,7 +131,7 @@ export type BoardSheetModel = {
   shift: ShiftPart;
   includeTeamName: boolean;
   courses: BoardSheetCourse[];
-  /** 표의 행 수 = max(21, 코스별 최대 슬롯 수) */
+  /** 표의 행 수 = 부 시간표 슬롯 수 (빈타임 포함, 21 패딩 없음) */
   rowCount: number;
   overflowCourses: CourseCode[];
   spare: BoardExportSpare;
@@ -189,12 +190,6 @@ export function buildBoardSheetModel(
     teeSheet: draft.teeSheet,
     unassignedReservations: unassigned,
   });
-  // 실제 운영 티 (예약 엑셀의 티 행). 보간 시각은 여기에 없다.
-  const realTee = new Set(
-    (draft.teeSheet || [])
-      .filter((s) => s.shift === shift)
-      .map((s) => `${s.course}|${s.teeTime}`)
-  );
 
   const courses: BoardSheetCourse[] = COURSE_CODES.map((code) => {
     const isOpen = open.has(code);
@@ -217,25 +212,26 @@ export function buildBoardSheetModel(
             caddies: [],
             teamNames: includeTeamName ? uniqTeamNames([cell.reservation.teamName]) : [],
           });
-        } else if (cell.kind === "empty" && realTee.has(`${code}|${tr.teeTime}`)) {
+        } else {
           slots.push({ teeTime: tr.teeTime, state: "empty", caddies: [], teamNames: [] });
         }
       }
     }
     const assigned = slots.filter((s) => s.state === "assigned").length;
     const vacant = slots.filter((s) => s.state === "unassigned").length;
+    const teams = assigned + vacant;
     return {
       code,
       label: BOARD_EXPORT_COURSE_LABELS[code],
       open: isOpen,
       slots,
-      teams: assigned + vacant,
+      teams,
       assigned,
       unassigned: vacant,
-      overflow: slots.length > BOARD_SHEET_BASE_ROWS,
+      overflow: teams > BOARD_SHEET_BASE_ROWS,
     };
   });
-  const rowCount = Math.max(BOARD_SHEET_BASE_ROWS, ...courses.map((c) => c.slots.length));
+  const rowCount = board.length;
   const totals = {
     assigned: courses.reduce((n, c) => n + c.assigned, 0),
     unassigned: courses.reduce((n, c) => n + c.unassigned, 0),
@@ -253,8 +249,26 @@ export function buildBoardSheetModel(
       draft.sparesByShift?.find((row) => row.shift === shift) || null
     ),
     totals,
-    isEmpty: courses.every((c) => c.slots.length === 0),
+    isEmpty: board.length === 0,
   };
+}
+
+/** 해당 슬롯까지 센 팀 수 (배정+미배치). empty는 세지 않음. */
+export function boardSheetTeamOrdinalAt(course: BoardSheetCourse, index: number): number {
+  let n = 0;
+  const last = Math.min(index, course.slots.length - 1);
+  for (let i = 0; i <= last; i++) {
+    const state = course.slots[i]?.state;
+    if (state === "assigned" || state === "unassigned") n += 1;
+  }
+  return n;
+}
+
+/** 이 시간 행에 어느 코스든 22번째 이후 팀이 있으면 true. */
+export function boardSheetRowHasOverflowTeam(model: BoardSheetModel, index: number): boolean {
+  return model.courses.some(
+    (c) => c.open && boardSheetTeamOrdinalAt(c, index) > BOARD_SHEET_BASE_ROWS
+  );
 }
 
 /** 코스 헤더 아래 요약 문구 */
@@ -262,7 +276,7 @@ export function boardSheetCourseSummary(course: BoardSheetCourse): string {
   if (!course.open) return BOARD_SHEET_CLOSED_LABEL;
   if (course.teams === 0) return BOARD_SHEET_NO_RESERVATION_LABEL;
   const base = `배정 ${course.assigned}${course.unassigned ? ` · 미배치 ${course.unassigned}` : ""}`;
-  return course.overflow ? `${base} · ${course.slots.length}행(21 초과)` : base;
+  return course.overflow ? `${base} · 21 초과` : base;
 }
 
 /** 엑셀·텍스트용 캐디 칸 문자열: "이름 조 [표시·표시]" (여러 명은 줄바꿈) */
