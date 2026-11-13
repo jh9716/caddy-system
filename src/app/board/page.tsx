@@ -265,11 +265,13 @@ export default function PublishedBoardPage() {
 
       <style>{`
         .pub-page {
-          max-width: 720px;
+          width: 100%;
+          max-width: min(100%, 1760px);
           margin: 0 auto;
           padding: 12px 10px 72px;
           display: grid;
           gap: 10px;
+          box-sizing: border-box;
         }
         .pub-head h1 {
           margin: 0;
@@ -337,6 +339,13 @@ export default function PublishedBoardPage() {
         .pub-notice { color: #334155; }
         .pub-page > * { min-width: 0; }
         .pub-skel { min-height: 240px; }
+        /* 원인: 이 페이지 .pub-page padding-bottom:72px (아래) + 셸 .vh-work-inner
+           padding: 14px 14px 76px (globals.css, .vh-work-inner) 가 겹쳐
+           댓글 아래 빈 띠가 약 72+76px. 하단 탭 여백은 셸이 이미 담당.
+           PC(기본 72px)는 유지하고 모바일에서만 페이지 하단 패딩을 줄인다. */
+        @media (max-width: 480px) {
+          .pub-page { padding: 12px 10px 8px; }
+        }
       `}</style>
     </div>
   );

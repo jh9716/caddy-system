@@ -313,3 +313,207 @@ export function richMobileDraft(date = "2026-11-17"): AssignmentDraft {
   v.reason = "UNASSIGNED_VACANT";
   return d;
 }
+
+
+/** 2026-11-01 1부 형태의 짧은 아침 배치표 (06:00~06:49). DB 없이 현장 1부 초반을 흉내 냄.
+ *  코스별 시각이 어긋나 한 행에 빈 칸과 배정 칸이 섞이고, 짧은 이름·긴 이름·배지가 함께 있다. */
+export function shortMorningNov1Draft(): AssignmentDraft {
+  const date = "2026-11-01";
+  const plan: Record<CourseCode, string[]> = {
+    VERTHILL: ["06:00", "06:07", "06:14", "06:21", "06:28", "06:35", "06:42", "06:49"],
+    SKY: ["06:04", "06:12", "06:20", "06:28", "06:36", "06:44"],
+    OCEAN: ["06:02", "06:09", "06:16", "06:23", "06:30", "06:37", "06:44"],
+    LAKE: ["06:06", "06:13", "06:20", "06:27", "06:34", "06:41", "06:48"],
+  };
+  // [course, tee, name, team, teamName, flags]
+  type Flag = "limo" | "house" | "lock" | "drive" | "call" | "none";
+  const named: Array<{
+    course: CourseCode; tee: string; name: string; team: string; teamName: string | null; flags: Flag[];
+  }> = [
+    { course: "VERTHILL", tee: "06:00", name: "김민수", team: "1조", teamName: "김예약", flags: [] },
+    { course: "VERTHILL", tee: "06:07", name: "이서연", team: "2조", teamName: "아침A", flags: ["limo"] },
+    { course: "VERTHILL", tee: "06:14", name: "박준", team: "3조", teamName: "박팀", flags: [] },
+    { course: "VERTHILL", tee: "06:21", name: "테스트마셜19", team: "4조", teamName: "마셜예약", flags: ["house", "limo"] },
+    { course: "VERTHILL", tee: "06:28", name: "최유진", team: "5조", teamName: "최예약", flags: ["lock"] },
+    { course: "VERTHILL", tee: "06:35", name: "정하늘", team: "6조", teamName: "정팀", flags: [] },
+    { course: "VERTHILL", tee: "06:42", name: "한소희", team: "7조", teamName: "한예약", flags: ["drive"] },
+    { course: "VERTHILL", tee: "06:49", name: "오민재", team: "8조", teamName: "오팀", flags: [] },
+    { course: "SKY", tee: "06:04", name: "강보미", team: "1조", teamName: "강예약", flags: [] },
+    { course: "SKY", tee: "06:12", name: "윤지호", team: "2조", teamName: "윤팀", flags: ["house"] },
+    { course: "SKY", tee: "06:20", name: "테스트캐디01", team: "3조", teamName: "테스트예약01", flags: ["limo", "lock"] },
+    { course: "SKY", tee: "06:28", name: "신아린", team: "4조", teamName: "신예약", flags: [] },
+    { course: "SKY", tee: "06:36", name: "문재성", team: "5조", teamName: "문팀", flags: ["call"] },
+    { course: "SKY", tee: "06:44", name: "배서윤", team: "6조", teamName: "배예약", flags: [] },
+    { course: "OCEAN", tee: "06:02", name: "조민", team: "1조", teamName: "조예약", flags: ["limo"] },
+    { course: "OCEAN", tee: "06:09", name: "임하늘", team: "2조", teamName: "임팀", flags: [] },
+    { course: "OCEAN", tee: "06:16", name: "남궁서연", team: "3조", teamName: "남궁예약", flags: ["house"] },
+    { course: "OCEAN", tee: "06:23", name: "황민", team: "4조", teamName: "황예약", flags: [] },
+    { course: "OCEAN", tee: "06:30", name: "서지훈", team: "5조", teamName: "서팀", flags: ["drive"] },
+    { course: "OCEAN", tee: "06:37", name: "노은지", team: "6조", teamName: "노예약", flags: [] },
+    { course: "OCEAN", tee: "06:44", name: "홍길동", team: "7조", teamName: "홍팀", flags: ["lock"] },
+    { course: "LAKE", tee: "06:06", name: "유나", team: "1조", teamName: "유예약", flags: [] },
+    { course: "LAKE", tee: "06:13", name: "장도윤", team: "2조", teamName: "장팀", flags: ["limo", "house"] },
+    { course: "LAKE", tee: "06:20", name: "석민호", team: "3조", teamName: "석예약", flags: [] },
+    { course: "LAKE", tee: "06:27", name: "고은", team: "4조", teamName: "고팀", flags: [] },
+    { course: "LAKE", tee: "06:34", name: "변서준", team: "5조", teamName: "변예약", flags: ["call"] },
+    { course: "LAKE", tee: "06:41", name: "차우리", team: "6조", teamName: "차팀", flags: [] },
+    { course: "LAKE", tee: "06:48", name: "표지안", team: "7조", teamName: "표예약", flags: ["drive"] },
+  ];
+  const rows: AutoAssignmentRow[] = [];
+  let id = 1101;
+  for (const n of named) {
+    const row = printRow({
+      date,
+      shift: "1부",
+      course: n.course,
+      teeTime: n.tee,
+      caddyId: id++,
+      caddyName: n.name,
+      team: n.team,
+      teamName: n.teamName,
+      limousineCart: n.flags.includes("limo"),
+      houseRequest: n.flags.includes("house"),
+    });
+    if (n.flags.includes("lock")) row.locked = true;
+    if (n.flags.includes("drive")) row.kind = "driving";
+    if (n.flags.includes("call")) {
+      row.kind = "fixed";
+      row.reason = "찾근";
+    }
+    rows.push(row);
+  }
+  const teeSheet: NonNullable<AssignmentDraft["teeSheet"]> = [];
+  for (const course of COURSE_CODES) {
+    for (const teeTime of plan[course]) teeSheet.push({ course, shift: "1부", teeTime });
+  }
+  return {
+    date,
+    status: "DRAFT",
+    assignments: rows,
+    unassignedReservations: [],
+    closedCourseReservations: [],
+    openCourses: [...COURSE_CODES],
+    caddyPool: [],
+    teeSheet,
+    sparesByShift: [
+      { shift: "1부", spare1: { caddyId: 9901, name: "김스페어", team: "1조", teamOrder: 1 }, spare2: null },
+    ],
+    confirmedAt: "2026-11-01T04:00:00+09:00",
+  };
+}
+
+/** 2부·3부에 투근무 배지가 많이 나오도록, 같은 캐디가 앞 부에도 근무한 배치. */
+export function manyTwoWorkDraft(date = "2026-11-18"): AssignmentDraft {
+  const d = fullLoadDraft({ date });
+  const by = (shift: ShiftPart, course: CourseCode) =>
+    d.assignments.filter((a) => a.reservation.shift === shift && a.reservation.course === course);
+  // 2부: 각 코스 21명 중 앞 16명이 1부 동일 코스 캐디 → 2부에 투 다수
+  // 3부: 각 코스 21명 중 앞 16명이 1부 동일 코스 캐디 → 3부에 투 다수 (2부는 다른 캐디가 아닌 1부 재사용)
+  // 1부 캐디를 2부와 3부 양쪽에 쓰면 1·2·3 전부. 그래도 twoWork는 뒷부에 표시됨.
+  for (const course of COURSE_CODES) {
+    const s1 = by("1부", course);
+    const s2 = by("2부", course);
+    const s3 = by("3부", course);
+    const n = Math.min(16, s1.length, s2.length, s3.length);
+    for (let i = 0; i < n; i++) {
+      s2[i].caddy = { ...s1[i].caddy };
+      s2[i].kind = "oneTwo";
+      s2[i].pairId = `tw-${course}-12-${i}`;
+      s1[i].kind = "oneTwo";
+      s1[i].pairId = s2[i].pairId;
+      // 3부: 1부 캐디를 다시 쓰되 1·3 패턴. 2부와 겹치면 54홀이 되지만 표시 검증 목적.
+      s3[i].caddy = { ...s1[i].caddy };
+      s3[i].kind = "oneThree";
+      s3[i].pairId = `tw-${course}-13-${i}`;
+    }
+    // 긴 이름 + 여러 배지 (2부·3부 투와 함께)
+    if (s2[2]) {
+      s2[2].caddy = { ...s2[2].caddy, name: "테스트캐디01" };
+      s2[2].reservation.limousineCart = true;
+      s2[2].reservation.houseRequest = true;
+      s2[2].locked = true;
+    }
+    if (s3[3]) {
+      s3[3].caddy = { ...s3[3].caddy, name: "테스트마셜19" };
+      s3[3].reservation.limousineCart = true;
+      s3[3].locked = true;
+      s3[3].kind = "driving";
+    }
+  }
+  return d;
+}
+
+/**
+ * 2026-11-01 1부 06:07 레이크 하우스 누락 재현용 픽스처 (DB 없음).
+ * 해당 칸은 하우스만 있고 다른 배지는 없다 (모바일에서 Marks 숨김 회귀를 잡기 위함).
+ * 같은 시각 베르힐은 리무진만(주황 하단 띠 재현). 2부·3부와 다른 날짜에도 하우스 칸을 둔다.
+ */
+export function nov1Lake0607HouseDraft(date = "2026-11-01"): AssignmentDraft {
+  const rows: AutoAssignmentRow[] = [];
+  const teeSheet: NonNullable<AssignmentDraft["teeSheet"]> = [];
+  const add = (
+    shift: ShiftPart,
+    course: CourseCode,
+    tee: string,
+    name: string,
+    team: string,
+    teamName: string,
+    opts?: { house?: boolean; limo?: boolean; two?: boolean; lock?: boolean; drive?: boolean; call?: boolean }
+  ) => {
+    const row = printRow({
+      date,
+      shift,
+      course,
+      teeTime: tee,
+      caddyId: 5000 + rows.length,
+      caddyName: name,
+      team,
+      teamName,
+      houseRequest: opts?.house === true,
+      limousineCart: opts?.limo === true,
+    });
+    if (opts?.lock) row.locked = true;
+    if (opts?.drive) row.kind = "driving";
+    if (opts?.call) {
+      row.kind = "fixed";
+      row.reason = "찾근";
+    }
+    if (opts?.two) {
+      row.kind = "oneTwo";
+      row.pairId = `tw-${shift}-${course}-${tee}`;
+    }
+    rows.push(row);
+    teeSheet.push({ course, shift, teeTime: tee });
+  };
+
+  // 1부 06:07: 레이크 = 하우스만 (보고된 케이스). 베르힐 = 리무진만 (주황 띠).
+  add("1부", "VERTHILL", "06:07", "이서연", "2조", "아침A", { limo: true });
+  add("1부", "SKY", "06:07", "강보미", "1조", "강예약");
+  add("1부", "OCEAN", "06:07", "조민", "1조", "조예약");
+  add("1부", "LAKE", "06:07", "김하우", "3조", "레이크하우팀", { house: true });
+  // 같은 부 다른 시각: 하우스+리무진, 하우스만
+  add("1부", "LAKE", "06:14", "박준", "4조", "박팀", { house: true, limo: true });
+  add("1부", "SKY", "06:14", "윤지호", "2조", "윤팀", { house: true });
+  // 2부·3부 하우스 (회귀)
+  add("2부", "LAKE", "11:07", "최유진", "5조", "오후하우팀", { house: true });
+  add("2부", "VERTHILL", "11:07", "정하늘", "6조", "정팀", { house: true, limo: true });
+  add("2부", "SKY", "11:07", "한소희", "7조", "한예약", { two: true });
+  add("3부", "LAKE", "16:07", "오민재", "8조", "저녁하우팀", { house: true });
+  add("3부", "OCEAN", "16:07", "임하늘", "2조", "임팀", { house: true, call: true });
+  add("3부", "VERTHILL", "16:07", "남궁서연", "3조", "남궁예약", { house: true, lock: true });
+
+  return {
+    date,
+    status: "DRAFT",
+    assignments: rows,
+    unassignedReservations: [],
+    closedCourseReservations: [],
+    openCourses: [...COURSE_CODES],
+    caddyPool: [],
+    teeSheet,
+    sparesByShift: [
+      { shift: "1부", spare1: { caddyId: 9911, name: "김스페어", team: "1조", teamOrder: 1 }, spare2: null },
+    ],
+    confirmedAt: null,
+  };
+}

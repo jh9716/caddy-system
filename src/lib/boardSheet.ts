@@ -2,10 +2,14 @@
  * 배치표 공통 시트 모델 (읽기 전용).
  * /board 화면 · 이미지(PNG) · A4 인쇄(PDF) · 엑셀(XLSX)이 모두 이 모델 하나로 같은 표를 그린다.
  *
- * 표 구조: 행 = 코스 안에서의 팀 순번(1..21), 열 = 코스마다 [시각 | 캐디].
+ * 표 구조: 행 = 코스 안에서의 팀 순번(1..21), 열 = 코스마다 [시각 | 캐디 | 비고(빈 칸, 저장 없음)].
  *  - 코스별 실제 티오프 시각을 각 칸에 그대로 쓴다 (코스 간 시각을 맞추거나 만들지 않음).
  *  - 시각 출처: 운영 티시트(예약 엑셀의 실제 티 행) ∪ 예약(배정·미배치). 보간으로 만든 시각은 쓰지 않는다.
  *  - 기본 21행(코스별 최대 21팀 운영). 21을 넘으면 행을 늘리고 overflow 로 표시 (절대 자르지 않음).
+ *  - 배정 = 캐디가 1명 이상 있는 팀. 미배치 = 예약 칸은 있으나 캐디 없음.
+ *    한계: 게시본(Published)에는 미배정 예약 목록이 없다. 칸 자체가 없는 예약은 세지 못한다
+ *    (assignmentDraftFromPublishedPayload 가 unassignedReservations 를 빈 배열로 둔다).
+ *    /manage 초안 출력은 unassignedReservations 를 포함하므로 미배치가 잡힌다.
  * 자동배치/순번/LOCK/DB/API 와 무관. draft 를 읽기만 한다.
  */
 
@@ -29,6 +33,9 @@ export const BOARD_SHEET_TITLE = "VERTHILL 배치표";
 export const BOARD_SHEET_UNASSIGNED_LABEL = "미배치";
 export const BOARD_SHEET_CLOSED_LABEL = "휴장";
 export const BOARD_SHEET_NO_RESERVATION_LABEL = "예약 없음";
+/** 코스마다 [시각 | 캐디 | 비고]. 비고는 빈 칸만 (저장 기능 없음). */
+export const BOARD_SHEET_REMARK_LABEL = "비고";
+export const BOARD_SHEET_COLS_PER_COURSE = 3;
 
 const LINKED_KIND_TAG: Partial<Record<AssignmentKind, string>> = {
   oneTwo: "1·2",
@@ -89,6 +96,8 @@ export type BoardSheetCaddy = {
   marks: string[];
   /** 캐디 없는 자리 (셀 편집 빈 칸 등) → "미배치" */
   vacant: boolean;
+  /** 투근무(기존 twoWork 판정). 이름 칸 노란 배경용. 판정 로직은 여기서 바꾸지 않음. */
+  twoWork: boolean;
 };
 
 export type BoardSheetSlotState = "assigned" | "unassigned" | "empty";
@@ -142,7 +151,7 @@ function caddyOf(
   showLock: boolean
 ): BoardSheetCaddy {
   if (isVacantPrintCaddy(row)) {
-    return { name: "", affiliation: "", marks: [], vacant: true };
+    return { name: "", affiliation: "", marks: [], vacant: true, twoWork: false };
   }
   const marks = boardPrintMarks(row, all);
   if (showLock && row.locked === true) marks.push("LOCK");
@@ -151,6 +160,7 @@ function caddyOf(
     affiliation: row.caddy ? caddyAffiliation(row.caddy) : "",
     marks,
     vacant: false,
+    twoWork: marks.includes("투"),
   };
 }
 

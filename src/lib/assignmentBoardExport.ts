@@ -83,6 +83,7 @@ export function assignmentDraftFromPublishedPayload(
         teamName: null, // /board export source redaction. 화면 payload는 그대로.
         rawRowIndex: i + 1,
         limousineCart: p.limousine === true,
+        houseRequest: p.houseRequest === true,
       },
       caddy: {
         id: Number.isInteger(p.caddyId) ? (p.caddyId as number) : -(i + 1),

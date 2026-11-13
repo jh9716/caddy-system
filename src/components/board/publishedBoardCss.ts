@@ -65,7 +65,8 @@ export const publishedBoardCss = `
   .ops-board-row > .bc-time,
   .ops-board-row > .bc-cell {
     box-sizing: border-box;
-    height: 64px;
+    height: auto;
+    min-height: 0;
     vertical-align: middle;
     border: 1px solid var(--ops-board-line);
   }
@@ -86,7 +87,7 @@ export const publishedBoardCss = `
     font-size: 0.72rem;
     line-height: 1.15;
     text-align: center;
-    overflow: hidden;
+    overflow: visible;
     overflow-wrap: anywhere;
   }
   .bc-cell.empty {
@@ -113,15 +114,12 @@ export const publishedBoardCss = `
     background: #fff;
   }
   .bc-cell.assigned.special { background: #fffbeb; }
-  .bc-cell.assigned.two-work {
-    background: #f8fafc;
-    box-shadow: inset 2px 0 0 #94a3b8;
-  }
+  /* 투근무는 이름 배경색을 쓰지 않고 기존 '투' 배지(회색)로만 표시한다. */
   .bc-cell.assigned.chageun {
     background: #fffdf6;
     box-shadow: inset 2px 0 0 #d6b37a;
   }
-  .bc-cell.assigned.limo { box-shadow: inset 0 -3px 0 #f59e0b; }
+  /* 리무진 칸 주황 하단 띠(inset bottom amber bar)는 제거. 배지 색·의미는 유지. */
   .bc-cell.assigned.drive { box-shadow: inset 3px 0 0 #7c3aed; }
   .bc-slot {
     display: flex;
@@ -146,9 +144,9 @@ export const publishedBoardCss = `
     flex-direction: row;
     flex-wrap: wrap;
     justify-content: center;
-    overflow: hidden;
+    overflow: visible;
     gap: 2px;
-    min-height: 14px;
+    min-height: 0;
   }
   .bc-team .bc-badge {
     flex: 0 0 auto;
@@ -157,7 +155,7 @@ export const publishedBoardCss = `
   .bc-name,
   .bc-affil {
     max-width: 100%;
-    overflow: hidden;
+    overflow: visible;
     text-align: center;
   }
   /* 긴 이름은 잘라내지 않고 다음 줄로 */
@@ -195,6 +193,7 @@ export const publishedBoardCss = `
     color: #0f172a;
     line-height: 1.2;
   }
+  /* 투근무 노란 배경은 쓰지 않음. 구분은 .bc-badge.two */
   .bc-affil {
     font-size: 0.66rem;
     font-weight: 700;
@@ -208,8 +207,8 @@ export const publishedBoardCss = `
     flex-wrap: wrap;
     gap: 2px;
     max-width: 100%;
-    overflow: hidden;
-    min-height: 14px;
+    overflow: visible;
+    min-height: 0;
   }
   .bc-badge {
     display: inline-block;
@@ -251,6 +250,15 @@ export const publishedBoardCss = `
     font-weight: 800;
     color: #b45309;
   }
+  /* PC: 새 래퍼는 레이아웃에 영향 없음. 하우스 모바일 전용 마크는 PC에서 숨김. */
+  .bc-flags { display: contents; }
+  .bc-mark-house-mobile { display: none; }
+  /* 하우스만 있는 Marks는 PC에서만 숨김(빈 줄 방지, 팀행 배지 사용).
+     이 규칙을 모바일에도 적용하면, 팀행 배지를 숨긴 뒤 하우스 단독 셀의
+     배지가 통째로 사라진다 (t147 회귀, 2026-11-01 1부 06:07 레이크 형태). */
+  @media (min-width: 481px) {
+    .bc-marks:not(:has(:not(.bc-mark-house-mobile))) { display: none; }
+  }
   .pub-spare {
     display: flex;
     flex-wrap: wrap;
@@ -263,6 +271,21 @@ export const publishedBoardCss = `
     font-weight: 800;
     color: #0f172a;
   }
+  .pub-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 4px 2px;
+  }
+  .pub-foot .pub-spare { padding: 4px 0; }
+  .pub-totals {
+    font-size: 0.82rem;
+    font-weight: 800;
+    color: #0f172a;
+    margin-left: auto;
+  }
   .pub-empty-shift {
     padding: 18px 8px;
     text-align: center;
@@ -270,19 +293,120 @@ export const publishedBoardCss = `
     font-size: 0.85rem;
   }
   @media (max-width: 480px) {
-    /* 4코스 동시 표시 유지 + 가독성: 시각 열을 줄이고 이름·시각 글자를 키움 */
+    /* 4코스 동시 표시 + 셀 내부 동일 규칙: 예약자명 / 캐디명 / 조 / 배지.
+       캐디 이름은 위 슬롯이 비어도 같은 줄에서 시작(위에서부터 쌓음). */
     .ops-col-time { width: 42px; }
     .ops-col-course { width: calc((100% - 42px) / 4); }
     .ops-board-row > .bc-time { width: 42px; font-size: 0.75rem; }
+    .ops-board-row > .bc-time,
+    .ops-board-row > .bc-cell {
+      min-height: 40px;
+      vertical-align: top;
+    }
     .ops-board-head th {
       font-size: 0.72rem;
     }
     .bh-count { font-size: 0.6rem; }
-    .bc-cell { padding: 2px 1px; }
-    .bc-name { font-size: 0.8rem; }
-    .bc-affil { font-size: 0.62rem; }
-    .bc-badge, .bc-special { font-size: 0.58rem; padding: 0 2px; }
-    .lock-chip { font-size: 0.58rem; }
-    .bc-team-name { font-size: 0.6rem; }
+    .bc-cell { padding: 2px 1px 3px; overflow: visible; }
+    /* display:contents 는 테이블 셀 높이 계산을 깨뜨려 글자가 다음 행과 겹쳤다.
+       일반 플로우(flex)로 쌓아 행이 내용만큼 커지게 한다. */
+    .bc-slot {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 1px;
+      width: 100%;
+      min-width: 0;
+      min-height: 42px;
+      height: auto;
+    }
+    .bc-caddy {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+      min-width: 0;
+      gap: 1px;
+      flex: 0 0 auto;
+    }
+    .bc-team {
+      flex-direction: column;
+      flex-wrap: nowrap;
+      width: 100%;
+      min-height: 0;
+      gap: 0;
+      flex: 0 0 auto;
+    }
+    .bc-team-name-fallback { display: none; }
+    .bc-team.is-empty {
+      min-height: 0;
+      height: 0;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      border: 0;
+    }
+    /* 팀행의 하우스·리무진은 숨기고, Marks(최하단)로 통일. 리무진은 동일 필드 중복. */
+    .bc-team .bc-badge { display: none; }
+    .bc-mark-house-mobile { display: inline-block; }
+    .bc-team-name {
+      font-size: 0.56rem;
+      line-height: 1.15;
+      font-weight: 700;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: visible;
+    }
+    .bc-team-name.name-lg,
+    .bc-team-name.name-xl {
+      font-size: 0.48rem;
+      letter-spacing: -0.03em;
+    }
+    .bc-team-name.name-xl {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+      line-height: 1.1;
+    }
+    .bc-name {
+      font-size: 0.82rem;
+      font-weight: 800;
+      line-height: 1.15;
+      white-space: nowrap;
+      max-width: 100%;
+      overflow: visible;
+      flex: 0 0 auto;
+    }
+    /* 긴 이름만 축소. 2~4글자는 그대로. */
+    .bc-name.name-lg {
+      font-size: 0.7rem;
+      letter-spacing: -0.02em;
+    }
+    .bc-name.name-xl {
+      font-size: 0.6rem;
+      letter-spacing: -0.03em;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+      line-height: 1.12;
+    }
+    .bc-affil {
+      font-size: 0.58rem;
+      line-height: 1.1;
+    }
+    .bc-flags {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 1px;
+      width: 100%;
+      min-width: 0;
+      flex: 0 0 auto;
+    }
+    .bc-marks { display: inline-flex; gap: 1px; min-height: 0; }
+    .bc-badge, .bc-special { font-size: 0.54rem; padding: 0 2px; line-height: 1.2; }
+    .lock-chip { font-size: 0.54rem; min-height: 12px; padding: 0 3px; margin-top: 0; }
   }
 `;
