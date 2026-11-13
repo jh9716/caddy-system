@@ -1,12 +1,12 @@
 import React from "react";
 import {
-  BOARD_SHEET_BASE_ROWS,
   BOARD_SHEET_COLS_PER_COURSE,
   BOARD_SHEET_REMARK_LABEL,
   BOARD_SHEET_TITLE,
   BOARD_SHEET_UNASSIGNED_LABEL,
   boardSheetCourseSummary,
   boardSheetDateLabel,
+  boardSheetRowHasOverflowTeam,
   type BoardSheetCourse,
   type BoardSheetModel,
   type BoardSheetSlot,
@@ -14,8 +14,8 @@ import {
 
 /**
  * 배치표 공통 표 (hook 없음 → 서버 렌더/PNG/인쇄/테스트 공용).
- * 행 = 팀 순번 1..N(기본 21), 열 = 코스별 [시각 | 캐디 | 비고(빈 칸)]. 시각은 코스마다 실제 값.
- * 카트번호·현장 번호 열은 넣지 않는다. No 는 행 순번이다.
+ * 행 = 부 시간표 시각(빈타임 포함), 열 = 코스별 [시각 | 캐디 | 비고(빈 칸)].
+ * 같은 행의 코스 시각은 같고, 배정이 없으면 빈칸. 카트번호·현장 번호 열은 넣지 않는다.
  */
 function SlotCell({ slot, includeTeamName }: { slot: BoardSheetSlot; includeTeamName: boolean }) {
   const team =
@@ -152,7 +152,7 @@ function FooterBar({ model }: { model: BoardSheetModel }) {
       {model.isEmpty ? <span className="bs-flag">{model.shift} 배치 없음</span> : null}
       {model.overflowCourses.length ? (
         <span className="bs-flag" data-sheet-overflow="">
-          21팀 초과 {model.rowCount}행 — 잘림 없이 모두 표시
+          21팀 초과 — 잘림 없이 모두 표시
         </span>
       ) : null}
     </div>
@@ -202,7 +202,7 @@ export function BoardSheetTable({
                 {model.isEmpty ? <span className="bs-flag">{model.shift} 배치 없음</span> : null}
                 {model.overflowCourses.length ? (
                   <span className="bs-flag" data-sheet-overflow="">
-                    21팀 초과 {model.rowCount}행 — 잘림 없이 모두 표시
+                    21팀 초과 — 잘림 없이 모두 표시
                   </span>
                 ) : null}
               </div>
@@ -238,7 +238,7 @@ export function BoardSheetTable({
           {rows.map((i) => (
             <tr
               key={i}
-              className={`bs-row${i >= BOARD_SHEET_BASE_ROWS ? " bs-row-over" : ""}`}
+              className={`bs-row${boardSheetRowHasOverflowTeam(model, i) ? " bs-row-over" : ""}`}
               data-sheet-row={i + 1}
             >
               <th className="bs-no" scope="row">
@@ -254,7 +254,7 @@ export function BoardSheetTable({
       <FooterBar model={model} />
       <p className="bs-foot">
         {footnote ? `${footnote} · ` : ""}
-        행 = 코스별 팀 순번(기본 21팀) · 시각은 코스별 실제 티오프 · 표시: 리무진/하우스(예약 요청), 투(투근무), 찾근, 지원, 1·2/2·3 등 연속근무
+        행 = 부 시간표 시각(빈타임 포함) · 배정 없으면 빈칸 · 표시: 리무진/하우스(예약 요청), 투(투근무), 찾근, 지원, 1·2/2·3 등 연속근무
         {" · "}배정 = 캐디가 있는 팀 · 미배치 = 예약 칸은 있으나 캐디 없음
         {" · "}게시본에는 미배정 예약 목록이 없어, 칸 자체가 없는 예약은 집계하지 못함
         {" · "}비고는 빈 칸(저장 없음)

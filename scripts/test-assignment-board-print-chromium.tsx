@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AssignmentBoardPrintSheet } from "../src/components/board/AssignmentBoardPrintSheet";
+import PublishedBoardView from "../src/components/board/PublishedBoardView";
 import {
   BOARD_PRINT_BODY_CLASS,
   BOARD_PRINT_PORTAL_CLASS,
@@ -25,7 +26,14 @@ import {
 import { buildBoardPrintSheet, type BoardPrintSheet } from "../src/lib/assignmentBoardPrint";
 import type { AssignmentDraft } from "../src/lib/assignmentDraft";
 import type { ShiftPart } from "../src/lib/reservationParser";
-import { emptyAndUnassignedDraft, fullLoadDraft, largeDraft, threeShiftDraft } from "./fixtures/boardPrintFixtures";
+import {
+  emptyAndUnassignedDraft,
+  fullLoadDraft,
+  GAPPED_SHIFT_TIMES,
+  gappedTimetableDraft,
+  largeDraft,
+  threeShiftDraft,
+} from "./fixtures/boardPrintFixtures";
 import { buildPublishedPayloadFromDraft } from "../src/lib/dailyBoardPublished";
 import type { DailyBoardDraftPayloadV1 } from "../src/lib/dailyBoardDraft";
 import { publishedBoardPrintDraft } from "../src/lib/publishedBoardPrint";
@@ -54,6 +62,13 @@ function assert(cond: unknown, msg: string) {
 function chromePath(): string {
   const c = [process.env.CHROME_PATH, "/usr/bin/google-chrome-stable", "/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium"].filter(Boolean) as string[];
   return c.find((p) => existsSync(p)) || "google-chrome";
+}
+
+function publishedBoardHtml(payload: ReturnType<typeof buildPublishedPayloadFromDraft>, shift: ShiftPart): string {
+  const body = renderToStaticMarkup(<PublishedBoardView payload={payload} shift={shift} />);
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>board ${shift}</title><style>html,body{margin:0;padding:8px;background:#fff;font-family:sans-serif}</style></head>
+<body>${body}</body></html>`;
 }
 
 function pageHtml(sheet: BoardPrintSheet, zoom = 1): string {
@@ -231,7 +246,8 @@ async function printCase(cdp: Cdp, name: string, sheet: BoardPrintSheet, opts: {
     assert(leaked.length === 0, `${name}: 다른 부 데이터 섞임 없음${leaked.length ? " " + leaked.slice(0, 3) : ""}`);
   }
   if (opts.required?.length) {
-    const lost = opts.required.filter((s) => !all.includes(s));
+    const compact = all.replace(/\s+/g, "");
+    const lost = opts.required.filter((s) => !compact.includes(String(s).replace(/\s+/g, "")));
     assert(lost.length === 0, `${name}: 자기 부 캐디 ${opts.required.length}명 모두 출력${lost.length ? " 누락:" + lost.slice(0, 3) : ""}`);
   }
 }
@@ -278,17 +294,51 @@ async function main() {
     const big = buildBoardPrintSheet(largeDraft(), "1부", { includeTeamName: true });
     await printCase(cdp, "large-multipage-1부", big);
 
-    // 5-b) 4코스 × 21팀 만석 × 1·2·3부: 각 부 A4 가로 1쪽
+    // 5-b) 4코스 × 21팀 만석 × 1·2·3부 (공유 시간축, 빈칸 유지 → 쪽 수는 21행 압축이 아님)
     const full = fullLoadDraft();
     for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
       const ownSet = new Set(full.assignments.filter((a) => a.reservation.shift === shift).map((a) => a.caddy.name));
       const otherOnly = full.assignments.filter((a) => a.reservation.shift !== shift).map((a) => a.caddy.name);
-      await printCase(cdp, `full21-${shift}`, buildBoardPrintSheet(full, shift), { forbidden: otherOnly, required: [...ownSet], pages: 1 });
+      await printCase(cdp, `full21-${shift}`, buildBoardPrintSheet(full, shift), { forbidden: otherOnly, required: [...ownSet] });
     }
     // 5-c) 21팀 초과 (오션 24팀): 잘림 없이 24행
     const over = fullLoadDraft({ overflow: [{ shift: "2부", course: "OCEAN", extra: 3 }] });
     const overOwn = new Set(over.assignments.filter((a) => a.reservation.shift === "2부").map((a) => a.caddy.name));
     await printCase(cdp, "overflow24-2부", buildBoardPrintSheet(over, "2부"), { required: [...overOwn] });
+
+    // 5-d) 빈타임 유지: 1·2·3부 시간표 행이 당겨지지 않음
+    const gapped = gappedTimetableDraft();
+    const gappedPub = buildPublishedPayloadFromDraft(gapped as unknown as DailyBoardDraftPayloadV1);
+    for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+      const ownSet = new Set(gapped.assignments.filter((a) => a.reservation.shift === shift).map((a) => a.caddy.name));
+      const otherOnly = [...new Set(gapped.assignments.filter((a) => a.reservation.shift !== shift).map((a) => a.caddy.name))].filter((n) => !ownSet.has(n));
+      await printCase(cdp, `gapped-${shift}`, buildBoardPrintSheet(gapped, shift), { forbidden: otherOnly, required: [...ownSet] });
+    }
+
+    console.log("[chromium] /board empty tee rows");
+    for (const shift of ["1부", "2부", "3부"] as ShiftPart[]) {
+      const times = GAPPED_SHIFT_TIMES[shift];
+      const hole = times[2];
+      await load(cdp, publishedBoardHtml(gappedPub, shift), 390, 844, "screen", true);
+      const probe = await evaluate<{ times: string[]; empties: number; lakeEmpty: number }>(
+        cdp,
+        `(() => {
+          const times = Array.from(document.querySelectorAll("[data-board-time]")).map((el) => el.getAttribute("data-board-time") || "");
+          const row = document.querySelector('[data-board-time="${hole}"]');
+          const empties = row ? row.querySelectorAll('[data-board-cell="empty"]').length : 0;
+          const lakeEmpty = Array.from(document.querySelectorAll("tr[data-board-time] td:nth-child(5)[data-board-cell=\\"empty\\"]")).length;
+          return { times, empties, lakeEmpty };
+        })()`
+      );
+      assert(probe.times.join() === times.join(), `/board ${shift} 모바일: 시간축 ${times.join(",")}`);
+      assert(probe.empties === 4, `/board ${shift} 모바일: ${hole} 4코스 빈칸`);
+      if (shift === "3부") assert(probe.lakeEmpty === times.length, "/board 3부 모바일: 레이크 전 행 빈칸");
+      const shot = await cdp.send("Page.captureScreenshot", { format: "png" });
+      writeFileSync(join(OUT, `board-gapped-${shift}-mobile.png`), Buffer.from(shot.data, "base64"));
+      await load(cdp, publishedBoardHtml(gappedPub, shift), 1440, 900, "screen");
+      const pcBoard = await cdp.send("Page.captureScreenshot", { format: "png" });
+      writeFileSync(join(OUT, `board-gapped-${shift}-pc.png`), Buffer.from(pcBoard.data, "base64"));
+    }
 
     // 6) 모바일 미리보기 (390px, screen media, 화면 맞춤 zoom)
     console.log("[chromium] mobile preview");

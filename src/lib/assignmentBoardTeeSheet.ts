@@ -128,8 +128,8 @@ export function collectShiftBoardTeeTimes(input: {
   teeSheet?: readonly CourseTeeSlot[] | null;
   reservations?: readonly TeeTimeSourceReservation[] | null;
   /**
-   * false: 운영 티시트 ∪ 예약 시각만 (계산으로 만든 사이 시각 없음). /board 표시용.
-   * 기본 true: 기존 동작 (코스별 관측 간격으로 내부 공석 보간).
+   * false: 운영 티시트 ∪ 예약 시각만 (계산으로 만든 사이 시각 없음).
+   * 기본 true: 코스별 관측 간격으로 내부 공석을 보간해 빈타임 행을 유지. /board·인쇄 표시용.
    */
   fillInterior?: boolean;
 }): string[] {

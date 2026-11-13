@@ -44,7 +44,7 @@ export const BOARD_XLSX_MIME =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 /**
  * 공통 시트(/board·PNG·A4)와 같은 행·열: No | (코스별 시각, 캐디, 비고) × 베르힐·스카이·오션·레이크.
- * 4행: 코스명(3칸 병합), 5행: 시각/캐디/비고, 6행부터 팀 순번 1..21(+초과분).
+ * 4행: 코스명(3칸 병합), 5행: 시각/캐디/비고, 6행부터 부 시간표 슬롯(빈타임 포함).
  * 비고는 빈 칸이며 저장하지 않는다. 시트 보호를 걸지 않아 사용자가 직접 적을 수 있다.
  */
 export const BOARD_XLSX_TABLE_HEADERS = [
@@ -164,7 +164,7 @@ export function boardSheetInfoLine(model: BoardSheetModel): string {
     `스페어2: ${model.spare.spare2Label || "-"}`,
     `전체 배정 ${model.totals.assigned} · 미배치 ${model.totals.unassigned}`,
     ...model.courses.map((c) => `${c.label} ${boardSheetCourseSummary(c)}`),
-    model.overflowCourses.length ? `21팀 초과 ${model.rowCount}행(잘림 없음)` : null,
+    model.overflowCourses.length ? "21팀 초과 (잘림 없음)" : null,
   ].filter(Boolean);
   return parts.join(" · ");
 }
@@ -411,7 +411,6 @@ function styleBoardSheetCells(xml: string): string {
   const head1 = BOARD_XLSX_HEADER_ROW + 1;
   const head2 = BOARD_XLSX_SUBHEADER_ROW + 1;
   const data = BOARD_XLSX_DATA_START_ROW + 1;
-  const overflowFrom = data + 21; // 22번째 데이터 행부터 (기본 21행 다음)
   return xml.replace(/<c r="([A-Z]+)(\d+)"(?![^>]*\ss=)/g, (m, col: string, rowStr: string) => {
     const r = Number(rowStr);
     let xf: number;
@@ -420,7 +419,7 @@ function styleBoardSheetCells(xml: string): string {
     else if (r <= head2) xf = XF.head;
     else if (r >= data) {
       const c = col.length === 1 ? col.charCodeAt(0) - 65 : 26 * (col.charCodeAt(0) - 64) + (col.charCodeAt(1) - 65);
-      if (c === 0) xf = r >= overflowFrom ? XF.overflowNo : XF.no;
+      if (c === 0) xf = XF.no;
       else {
         const kind = (c - 1) % BOARD_SHEET_COLS_PER_COURSE;
         xf = kind === 0 ? XF.time : kind === 1 ? XF.caddy : XF.remark;
