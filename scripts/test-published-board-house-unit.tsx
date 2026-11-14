@@ -100,6 +100,19 @@ section("원인 고정: CSS 소스 (모바일 Marks 숨김 · 주황 띠)");
     /@media \(max-width: 480px\)[\s\S]*\.bc-marks\s*\{\s*display:\s*inline-flex/.test(css),
     "모바일: .bc-marks display:inline-flex 로 하우스 단독도 보임"
   );
+  const mobileCss = css.slice(css.lastIndexOf("@media (max-width: 480px)"));
+  const pcCss = css.slice(0, css.lastIndexOf("@media (max-width: 480px)"));
+  assert(
+    /--pub-board-row-h:\s*64px/.test(mobileCss) &&
+      /\.pub-board-root \.ops-board-row\s*\{[\s\S]*?height:\s*var\(--pub-board-row-h\)/.test(mobileCss) &&
+      /max-height:\s*var\(--pub-board-row-h\)/.test(mobileCss),
+    "/board 모바일: .pub-board-root 범위에서 행 높이 64px 고정 (height=max-height)"
+  );
+  assert(!/--pub-board-row-h/.test(pcCss), "PC CSS: --pub-board-row-h 없음");
+  assert(
+    !/\.ops-board-row\s*>\s*\.bc-cell\s*\{[^}]*min-height:\s*40px/.test(mobileCss),
+    "모바일 행 높이는 전역 .ops-board-row min-height:40 이 아님"
+  );
   const manage = readFileSync("src/app/manage/assignments/page.tsx", "utf8");
   assert(
     !/inset 0 -3px 0/.test(manage),

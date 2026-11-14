@@ -294,14 +294,33 @@ export const publishedBoardCss = `
   }
   @media (max-width: 480px) {
     /* 4코스 동시 표시 + 셀 내부 동일 규칙: 예약자명 / 캐디명 / 조 / 배지.
-       캐디 이름은 위 슬롯이 비어도 같은 줄에서 시작(위에서부터 쌓음). */
+       캐디 이름은 위 슬롯이 비어도 같은 줄에서 시작(위에서부터 쌓음).
+       행 높이는 /board(.pub-board-root) 전용. 배정 행(이름+조+배지, 실측 ~47–61px)에
+       맞춰 64px로 고정하고, 빈타임도 같은 높이를 쓴다. min-height만 두면
+       테이블 셀이 내용에 따라 줄어들므로 height=min=max 로 잠근다. */
+    .pub-board-root { --pub-board-row-h: 64px; }
     .ops-col-time { width: 42px; }
     .ops-col-course { width: calc((100% - 42px) / 4); }
     .ops-board-row > .bc-time { width: 42px; font-size: 0.75rem; }
-    .ops-board-row > .bc-time,
-    .ops-board-row > .bc-cell {
-      min-height: 40px;
+    .pub-board-root .ops-board-row {
+      height: var(--pub-board-row-h);
+    }
+    .pub-board-root .ops-board-row > .bc-time,
+    .pub-board-root .ops-board-row > .bc-cell {
+      height: var(--pub-board-row-h);
+      min-height: var(--pub-board-row-h);
+      max-height: var(--pub-board-row-h);
       vertical-align: top;
+      overflow: hidden;
+    }
+    /* 내용 없는 빈칸 td 는 height 만으로 안 늘어나므로 고정 높이 스페이서. */
+    .pub-board-root .ops-board-row > .bc-cell.empty {
+      padding: 0;
+    }
+    .pub-board-root .ops-board-row > .bc-cell.empty::before {
+      content: "";
+      display: block;
+      height: var(--pub-board-row-h);
     }
     .ops-board-head th {
       font-size: 0.72rem;
@@ -310,7 +329,7 @@ export const publishedBoardCss = `
     .bc-cell { padding: 2px 1px 3px; overflow: visible; }
     /* display:contents 는 테이블 셀 높이 계산을 깨뜨려 글자가 다음 행과 겹쳤다.
        일반 플로우(flex)로 쌓아 행이 내용만큼 커지게 한다. */
-    .bc-slot {
+    .pub-board-root .bc-slot {
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -318,8 +337,10 @@ export const publishedBoardCss = `
       gap: 1px;
       width: 100%;
       min-width: 0;
-      min-height: 42px;
-      height: auto;
+      min-height: 0;
+      height: 100%;
+      max-height: 100%;
+      overflow: hidden;
     }
     .bc-caddy {
       display: flex;
