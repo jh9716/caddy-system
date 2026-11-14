@@ -15,6 +15,7 @@ type TokenLike = { token: string; exp: number; user: { userId: number } };
 type Cache<T, R> = { token: T | null; rooms: R[] | null; roomsUserId: number | null };
 
 const cache: Cache<TokenLike, unknown> = { token: null, rooms: null, roomsUserId: null };
+let lastOpenedRoomId: string | null = null;
 let subscribed = false;
 
 function ensureSubscribed(): void {
@@ -31,6 +32,7 @@ export function clearChatFastEntryCache(): void {
   cache.token = null;
   cache.rooms = null;
   cache.roomsUserId = null;
+  lastOpenedRoomId = null;
 }
 
 export function isReusableChatToken(
@@ -59,6 +61,7 @@ export function rememberChatToken(info: TokenLike | null | undefined): void {
   if (cache.token && cache.token.user?.userId !== info.user?.userId) {
     cache.rooms = null;
     cache.roomsUserId = null;
+    lastOpenedRoomId = null;
   }
   cache.token = info;
 }
@@ -78,6 +81,46 @@ export function readCachedChatRooms<R>(userId: number | null | undefined): R[] |
   ensureSubscribed();
   if (!userId || isChatSessionEnded() || cache.roomsUserId !== userId || !cache.rooms) return null;
   return (cache.rooms as R[]).slice();
+}
+
+/** Same-tab memory only. Not membership. Cleared on logout / account switch. */
+export function rememberLastOpenedChatRoom(roomId: string | null | undefined): void {
+  ensureSubscribed();
+  if (isChatSessionEnded()) {
+    lastOpenedRoomId = null;
+    return;
+  }
+  const id = String(roomId || "").trim();
+  lastOpenedRoomId = id || null;
+}
+
+export function readLastOpenedChatRoom(): string | null {
+  ensureSubscribed();
+  if (isChatSessionEnded()) return null;
+  const id = String(lastOpenedRoomId || "").trim();
+  return id || null;
+}
+
+/** Best-effort idle prefetch. Full payload only; never logs the token. */
+export async function prefetchChatTokenIfNeeded(
+  fetchFn: (url: string, init?: RequestInit) => Promise<Response> = fetch
+): Promise<boolean> {
+  ensureSubscribed();
+  if (isChatSessionEnded()) return false;
+  if (readReusableChatToken()) return false;
+  try {
+    const res = await fetchFn("/api/chat/token", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+    });
+    const data = (await res.json().catch(() => null)) as TokenLike | null;
+    if (!res.ok || !data?.token || !data?.exp || !data?.user?.userId) return false;
+    rememberChatToken(data);
+    return Boolean(readReusableChatToken());
+  } catch {
+    return false;
+  }
 }
 
 /** 딥링크 즉시 입장용 최소 요약. 권한은 Worker 가 WS 에서 판정한다. */

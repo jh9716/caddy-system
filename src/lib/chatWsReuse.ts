@@ -83,6 +83,15 @@ export function shouldParkChatWsReuse(input: {
 }
 
 /**
+ * Leave-path GET /api/chat/ws-reuse is required until this tab has seen runtime
+ * true. Waiting on every leave delayed park by up to 800ms, so a fast re-tap
+ * missed the parked socket. Unknown/false still awaits (Instant Rollback).
+ */
+export function shouldAwaitParkRuntimeCheck(cachedRuntimeEnabled: boolean): boolean {
+  return cachedRuntimeEnabled !== true;
+}
+
+/**
  * Apply a runtime poll. Anything other than boolean true drops a parked socket
  * so Instant Rollback (API false/404) closes reuse without waiting for TTL.
  */

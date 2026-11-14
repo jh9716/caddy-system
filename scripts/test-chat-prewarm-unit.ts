@@ -42,7 +42,25 @@ console.log("== pick ==");
 assert(CHAT_PREWARM_MAX_ROOMS === 1, "max 1 room");
 assert(
   pickChatPrewarmRoom({ directorySnapshotReady: false, sessionEnded: false, rooms }) === null,
-  "stale list cache cannot pick"
+  "stale list cache cannot pick rooms[0]"
+);
+assert(
+  pickChatPrewarmRoom({
+    directorySnapshotReady: false,
+    sessionEnded: false,
+    rooms,
+    lastOpenedRoomId: "dm_1_2",
+  }) === "dm_1_2",
+  "cached last-opened may prewarm before snapshot"
+);
+assert(
+  pickChatPrewarmRoom({
+    directorySnapshotReady: false,
+    sessionEnded: false,
+    rooms,
+    lastOpenedRoomId: "gone",
+  }) === null,
+  "unknown last-opened does not pick first from cache"
 );
 assert(
   pickChatPrewarmRoom({ directorySnapshotReady: true, sessionEnded: true, rooms }) === null,
@@ -156,6 +174,17 @@ assert(
     inflightOrReady: false,
   }) === true,
   "list + snapshot starts one prewarm"
+);
+assert(
+  shouldStartChatPrewarm({
+    viewIsList: true,
+    directorySnapshotReady: false,
+    sessionEnded: false,
+    hasTarget: true,
+    currentRoomId: null,
+    inflightOrReady: false,
+  }) === true,
+  "list + last-opened hint starts before snapshot"
 );
 assert(
   shouldStartChatPrewarm({
@@ -336,6 +365,8 @@ assert(chat.includes("shouldHoldChatReadWhilePrewarm"), "read held on list");
 assert(chat.includes("dropChatPrewarm"), "deny/session drops prewarm");
 assert(chat.includes("shouldWipePrewarmAfterDrop"), "list drop bumps roomGen so parked events cannot send read");
 assert(chat.includes("lastOpenedRoomIdRef.current = null"), "session reset forgets last opened room");
+assert(chat.includes("rememberLastOpenedChatRoom"), "last opened survives /chat remount in memory");
+assert(chat.includes("shouldPaintCachedRoomsNow"), "layout cache list paint");
 assert(/subscribeChatSessionReset[\s\S]{0,400}clearLocalLines\(\[\]\)/.test(chat), "session reset wipes prewarmed lines");
 assert(chat.includes("beginChatPrewarm"), "generation bump on start");
 assert(chat.includes("prewarmGen"), "connect aborted when superseded");

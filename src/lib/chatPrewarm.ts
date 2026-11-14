@@ -68,10 +68,12 @@ export function pickChatPrewarmRoom(input: {
   lastOpenedRoomId?: string | null;
 }): string | null {
   if (input.sessionEnded) return null;
-  if (input.directorySnapshotReady !== true) return null;
   if (!Array.isArray(input.rooms) || input.rooms.length === 0) return null;
   const last = String(input.lastOpenedRoomId || "").trim();
   if (last && input.rooms.some((row) => row.roomId === last)) return last;
+  // First-room fallback needs an authoritative snapshot. Cached lists must not
+  // pick rooms[0] (usually ALL) — Worker still authorizes last-opened.
+  if (input.directorySnapshotReady !== true) return null;
   const first = String(input.rooms[0]?.roomId || "").trim();
   return first || null;
 }
@@ -165,9 +167,11 @@ export function shouldStartChatPrewarm(input: {
   currentRoomId: string | null | undefined;
   inflightOrReady: boolean;
 }): boolean {
-  if (!input.viewIsList || !input.directorySnapshotReady || input.sessionEnded) return false;
+  if (!input.viewIsList || input.sessionEnded) return false;
   if (!input.hasTarget) return false;
   if (input.inflightOrReady && input.currentRoomId) return false;
+  // Snapshot is required only inside pickChatPrewarmRoom (first-room fallback).
+  // last-opened ∈ current rooms may start before snapshot; Worker still authorizes.
   return true;
 }
 
