@@ -9,6 +9,11 @@ import {
   canViewNotice,
   formatNoticeTargetLabel,
 } from "@/lib/noticeTarget";
+import {
+  NOTICE_PUBLISH_ALWAYS_PERIOD_LABEL,
+  NOTICE_PUBLISH_STATUS_LABELS,
+} from "@/lib/noticeConstants";
+import { noticePublishStatus } from "@/lib/noticePublishWindow";
 import { listNoticePhotos } from "@/lib/noticePhoto";
 import { listNoticeFiles } from "@/lib/noticeFile";
 import NoticeDetailActions from "@/components/notice/NoticeDetailActions";
@@ -43,6 +48,7 @@ export default async function NoticeDetailPage({
   const photos = await listNoticePhotos(prisma, id);
   const files = await listNoticeFiles(prisma, id);
   const hasWindow = Boolean(notice.publishStartAt || notice.publishEndAt);
+  const publishStatus = noticePublishStatus(notice);
 
   return (
     <div className="notice-page notice-detail">
@@ -50,6 +56,11 @@ export default async function NoticeDetailPage({
         ← 목록
       </Link>
       <div className="notice-detail-badges">
+        {isAdmin ? (
+          <span className={`notice-badge notice-badge-publish is-${publishStatus}`}>
+            {NOTICE_PUBLISH_STATUS_LABELS[publishStatus]}
+          </span>
+        ) : null}
         {notice.important ? <span className="notice-badge notice-badge-important">중요공지</span> : null}
         {notice.pinned ? <span className="notice-badge notice-badge-pinned">상단고정</span> : null}
       </div>
@@ -67,20 +78,22 @@ export default async function NoticeDetailPage({
           <dt>게시 대상</dt>
           <dd>{formatNoticeTargetLabel(notice)}</dd>
         </div>
-        {hasWindow ? (
-          <div>
-            <dt>게시 기간</dt>
-            <dd>
-              {notice.publishStartAt
-                ? formatKstDisplay(notice.publishStartAt, "ymd-hm")
-                : "시작 없음"}
-              {" ~ "}
-              {notice.publishEndAt
-                ? formatKstDisplay(notice.publishEndAt, "ymd-hm")
-                : "종료 없음"}
-            </dd>
-          </div>
-        ) : null}
+        <div>
+          <dt>게시 기간</dt>
+          <dd>
+            {hasWindow
+              ? `${
+                  notice.publishStartAt
+                    ? formatKstDisplay(notice.publishStartAt, "ymd-hm")
+                    : "시작 없음"
+                } ~ ${
+                  notice.publishEndAt
+                    ? formatKstDisplay(notice.publishEndAt, "ymd-hm")
+                    : "종료 없음"
+                }`
+              : NOTICE_PUBLISH_ALWAYS_PERIOD_LABEL}
+          </dd>
+        </div>
       </dl>
       <div className="notice-detail-body">{content || "내용이 없습니다."}</div>
       <NoticePhotoGallery noticeId={id} photos={photos} />

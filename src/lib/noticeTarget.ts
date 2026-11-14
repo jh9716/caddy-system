@@ -3,10 +3,12 @@ import { DRIVING_POOL_TEAM, isPrimaryTeam } from "@/lib/caddyManage";
 import {
   NOTICE_CADDY_TYPES,
   NOTICE_LIST_ORDER,
+  NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE,
   NOTICE_TARGET_ALL,
   NOTICE_TARGET_CADDY_TYPE,
   NOTICE_TARGET_TEAM,
   NOTICE_TARGET_TYPES,
+  type NoticePublishFilter,
   type NoticeTargetType,
 } from "@/lib/noticeConstants";
 import type { AppRole } from "@/lib/sessionCookies";
@@ -114,15 +116,24 @@ export function parseNoticePublishWindow(input: {
   } = {};
   if (publishStartAt !== undefined) out.publishStartAt = publishStartAt;
   if (publishEndAt !== undefined) out.publishEndAt = publishEndAt;
-  const start = publishStartAt === undefined ? undefined : publishStartAt;
-  const end = publishEndAt === undefined ? undefined : publishEndAt;
-  if (start && end && start.getTime() > end.getTime()) {
+  assertNoticePublishOrder(
+    publishStartAt === undefined ? undefined : publishStartAt,
+    publishEndAt === undefined ? undefined : publishEndAt
+  );
+  return out;
+}
+
+/** Both bounds required to compare. One-sided or both-null windows stay valid. */
+export function assertNoticePublishOrder(
+  start: Date | null | undefined,
+  end: Date | null | undefined
+) {
+  if (start && end && start.getTime() >= end.getTime()) {
     throw new NoticeValidationError(
       "invalid_window",
-      "게시 시작일이 종료일보다 늦을 수 없습니다."
+      NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE
     );
   }
-  return out;
 }
 
 /** PATCH/POST both accept schema `content` and legacy form `body`. */
@@ -132,6 +143,11 @@ export function readNoticeContent(body: Record<string, unknown>): string | undef
   return undefined;
 }
 
+/**
+ * Half-open window [publishStartAt, publishEndAt).
+ * Date-only UI stores exclusive end as next KST day 00:00.
+ * null start/end means no bound, so existing notices stay live.
+ */
 export function isNoticeInPublishWindow(
   notice: NoticePublishFields,
   now: Date = new Date()
@@ -139,7 +155,7 @@ export function isNoticeInPublishWindow(
   if (notice.publishStartAt && notice.publishStartAt.getTime() > now.getTime()) {
     return false;
   }
-  if (notice.publishEndAt && notice.publishEndAt.getTime() < now.getTime()) {
+  if (notice.publishEndAt && notice.publishEndAt.getTime() <= now.getTime()) {
     return false;
   }
   return true;
@@ -196,7 +212,7 @@ export function visibleNoticeWhere(
         OR: [{ publishStartAt: null }, { publishStartAt: { lte: now } }],
       },
       {
-        OR: [{ publishEndAt: null }, { publishEndAt: { gte: now } }],
+        OR: [{ publishEndAt: null }, { publishEndAt: { gt: now } }],
       },
       { OR: targetOr },
     ],
@@ -205,6 +221,28 @@ export function visibleNoticeWhere(
 
 export function noticeListOrder(): typeof NOTICE_LIST_ORDER {
   return NOTICE_LIST_ORDER;
+}
+
+/** Admin list filter only. Caddy/leader keep visibleNoticeWhere. */
+export function adminNoticePublishWhere(
+  filter: NoticePublishFilter,
+  now: Date = new Date()
+): Prisma.NoticeWhereInput {
+  if (filter === "scheduled") {
+    return { publishStartAt: { gt: now } };
+  }
+  if (filter === "ended") {
+    return { publishEndAt: { lte: now } };
+  }
+  if (filter === "live") {
+    return {
+      AND: [
+        { OR: [{ publishStartAt: null }, { publishStartAt: { lte: now } }] },
+        { OR: [{ publishEndAt: null }, { publishEndAt: { gt: now } }] },
+      ],
+    };
+  }
+  return {};
 }
 
 const NOTICE_CADDY_TYPE_LABELS: Record<string, string> = {

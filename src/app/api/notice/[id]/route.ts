@@ -24,6 +24,7 @@ import {
 } from "@/lib/noticeFile";
 import {
   NoticeValidationError,
+  assertNoticePublishOrder,
   canViewNotice,
   parseNoticeWriteBody,
 } from "@/lib/noticeTarget";
@@ -92,7 +93,19 @@ export async function PATCH(
   }
   const body = await req.json().catch(() => ({}));
   try {
+    const existing = await prisma.notice.findUnique({ where: { id } });
+    if (!existing) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
     const parsed = parseNoticeWriteBody(body, "update");
+    assertNoticePublishOrder(
+      parsed.publishStartAt !== undefined
+        ? parsed.publishStartAt
+        : existing.publishStartAt,
+      parsed.publishEndAt !== undefined
+        ? parsed.publishEndAt
+        : existing.publishEndAt
+    );
     const data: {
       title?: string;
       content?: string;
