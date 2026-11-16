@@ -1,6 +1,9 @@
 import { listEffectiveOpsDutyCaddyIds } from "@/lib/opsDutyEffectiveService";
 import { excludeCaddiesById } from "@/lib/dailyOpsDuty";
-import type { AutoAssignCaddy } from "@/lib/autoAssignEngine";
+import {
+  eligibleRegularReflowCaddies,
+  type AutoAssignCaddy,
+} from "@/lib/autoAssignEngine";
 import {
   isOffSheetUnresolvedError,
   loadCanonicalReflowState,
@@ -64,7 +67,7 @@ export async function resolveCanonicalLivePool(
     const ids = await listEffectiveOpsDutyCaddyIds(date).catch(() => [] as number[]);
     return {
       ...empty,
-      computePool: excludeCaddiesById(pool, ids),
+      computePool: eligibleRegularReflowCaddies(excludeCaddiesById(pool, ids)),
       rosterBaseline: [...(opts?.rosterClientPool || pool)],
     };
   }

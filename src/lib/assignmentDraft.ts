@@ -45,7 +45,12 @@ import {
   isUsableOffSnapshot,
   type DraftOffSnapshot,
 } from "@/lib/offSnapshot";
-import { isOperationalEmploymentStatus } from "@/lib/operationalRoster";
+import {
+  INACTIVE_EMPLOYMENT_WARNING_CODE,
+  inactiveEmploymentWarningMessage,
+  isAssignableCaddy,
+  overlayLatestEmploymentStatus,
+} from "@/lib/assignableRoster";
 import { mergeDraftOnlyReservationFlags } from "@/lib/assignmentBoardDirectEdit";
 
 export type DraftStatus = "DRAFT" | "EDITED" | "CONFIRMED" | "APPLIED";
@@ -243,8 +248,32 @@ export function unusedCaddies(draft: AssignmentDraft): AutoAssignCaddy[] {
       !used.has(c.id) &&
       c.id > 0 &&
       c.name &&
-      isOperationalEmploymentStatus(c.employmentStatus)
+      isAssignableCaddy(c)
   );
+}
+
+export function applyLatestEmploymentToDraft(
+  draft: AssignmentDraft | null | undefined,
+  source:
+    | readonly {
+        id?: number;
+        caddyId?: number;
+        employmentStatus?: unknown;
+      }[]
+    | null
+    | undefined
+): AssignmentDraft | null | undefined {
+  if (!draft) return draft;
+  const rows = source || [];
+  if (!rows.length) return draft;
+  return {
+    ...draft,
+    caddyPool: overlayLatestEmploymentStatus(draft.caddyPool, rows),
+    assignments: draft.assignments.map((row) => ({
+      ...cloneRow(row),
+      caddy: overlayLatestEmploymentStatus([row.caddy], rows)[0] || row.caddy,
+    })),
+  };
 }
 
 export function spareIdsFromDraft(draft: AssignmentDraft): number[] {
@@ -620,6 +649,40 @@ export function detectDraftWarnings(draft: AssignmentDraft): DraftWarning[] {
     }
   }
 
+  const seenInactive = new Set<number>();
+  const pushInactive = (
+    caddy: AutoAssignCaddy,
+    reservationKeyValue?: string
+  ) => {
+    if (!(caddy.id > 0) || !String(caddy.name || "").trim()) return;
+    if (isAssignableCaddy(caddy) || seenInactive.has(caddy.id)) return;
+    seenInactive.add(caddy.id);
+    warnings.push({
+      level: "error",
+      code: INACTIVE_EMPLOYMENT_WARNING_CODE,
+      message: inactiveEmploymentWarningMessage(
+        caddy.name,
+        caddy.employmentStatus
+      ),
+      caddyId: caddy.id,
+      reservationKey: reservationKeyValue,
+    });
+  };
+
+  for (const row of draft.assignments) {
+    pushInactive(row.caddy, reservationKey(row.reservation));
+  }
+  for (const spare of draft.sparesByShift || []) {
+    for (const slot of [spare.spare1, spare.spare2]) {
+      const id = Number(slot?.caddyId);
+      if (!Number.isInteger(id) || id < 1) continue;
+      const found =
+        draft.caddyPool.find((c) => c.id === id) ||
+        draft.assignments.find((row) => row.caddy.id === id)?.caddy;
+      if (found) pushInactive(found);
+    }
+  }
+
   return warnings;
 }
 
@@ -705,6 +768,23 @@ export function replaceAssignmentCaddy(
           level: "error",
           code: "CADDY_NOT_FOUND",
           message: `캐디 #${newCaddyId}를 찾을 수 없습니다.`,
+          caddyId: newCaddyId,
+        },
+      ],
+      specialEditWarned,
+    };
+  }
+  if (!isAssignableCaddy(newCaddy)) {
+    return {
+      draft,
+      warnings: [
+        {
+          level: "error",
+          code: INACTIVE_EMPLOYMENT_WARNING_CODE,
+          message: inactiveEmploymentWarningMessage(
+            newCaddy.name,
+            newCaddy.employmentStatus
+          ),
           caddyId: newCaddyId,
         },
       ],
@@ -854,6 +934,23 @@ export function assignCaddyToUnassigned(
           level: "error",
           code: "CADDY_NOT_FOUND",
           message: `캐디 #${caddyId}를 찾을 수 없습니다.`,
+          caddyId,
+        },
+      ],
+      specialEditWarned: false,
+    };
+  }
+  if (!isAssignableCaddy(caddy)) {
+    return {
+      draft,
+      warnings: [
+        {
+          level: "error",
+          code: INACTIVE_EMPLOYMENT_WARNING_CODE,
+          message: inactiveEmploymentWarningMessage(
+            caddy.name,
+            caddy.employmentStatus
+          ),
           caddyId,
         },
       ],

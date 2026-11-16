@@ -29,7 +29,7 @@ import {
   type BoardCell,
   type BoardTimeRow,
 } from "@/lib/assignmentBoardView";
-import { isOperationalEmploymentStatus } from "@/lib/operationalRoster";
+import { isAssignableCaddy } from "@/lib/assignableRoster";
 import {
   COURSE_CODES,
   type CourseCode,
@@ -46,7 +46,7 @@ export const DIRECT_EDIT_SHIFT_BLOCKED_MESSAGE =
   "LOCK/특수 배치를 밀어야 해서 이 위치에 미배치 캐디를 넣을 수 없습니다.";
 
 export const DIRECT_EDIT_NOT_OPERATIONAL_MESSAGE =
-  "퇴사/삭제 캐디는 배치할 수 없습니다.";
+  "휴직/퇴사 캐디는 배치할 수 없습니다.";
 
 export const DIRECT_EDIT_NOT_FOUND_MESSAGE = "배치 예약을 찾을 수 없습니다.";
 
@@ -275,12 +275,18 @@ function spareCaddyFromDraft(
   return null;
 }
 
-export function isOperationalPickerCaddy(
-  caddy: Pick<AutoAssignCaddy, "id" | "name" | "employmentStatus"> | null | undefined
+export function isListedBoardCaddy(
+  caddy: Pick<AutoAssignCaddy, "id" | "name"> | null | undefined
 ): boolean {
   if (!caddy || !Number.isInteger(caddy.id) || caddy.id <= 0) return false;
-  if (!String(caddy.name || "").trim()) return false;
-  return isOperationalEmploymentStatus(caddy.employmentStatus);
+  return String(caddy.name || "").trim() !== "";
+}
+
+export function isAssignablePickerCaddy(
+  caddy: Pick<AutoAssignCaddy, "id" | "name" | "employmentStatus"> | null | undefined
+): boolean {
+  if (!isListedBoardCaddy(caddy)) return false;
+  return isAssignableCaddy(caddy);
 }
 
 function sameShiftAssignedRow(
@@ -318,7 +324,7 @@ export function listDirectEditCandidates(
       (row) =>
         assignmentShift(row) === shift &&
         !isDirectEditVacant(row) &&
-        isOperationalPickerCaddy(row.caddy)
+        isListedBoardCaddy(row.caddy)
     )
     .sort(compareAssignmentOrder);
 
@@ -327,8 +333,13 @@ export function listDirectEditCandidates(
   const out: DirectEditCandidate[] = [];
   const seen = new Set<number>();
 
-  const push = (candidate: DirectEditCandidate) => {
-    if (!isOperationalPickerCaddy(candidate.caddy)) return;
+  const push = (
+    candidate: DirectEditCandidate,
+    opts?: { requireAssignable?: boolean }
+  ) => {
+    const requireAssignable = opts?.requireAssignable !== false;
+    if (requireAssignable && !isAssignablePickerCaddy(candidate.caddy)) return;
+    if (!requireAssignable && !isListedBoardCaddy(candidate.caddy)) return;
     if (!matchesDirectEditQuery(candidate.caddy, query)) return;
     if (seen.has(candidate.caddy.id)) return;
     seen.add(candidate.caddy.id);
@@ -340,14 +351,17 @@ export function listDirectEditCandidates(
       assignedInShift.find((row) => row.caddy.id === currentId) ||
       draft.assignments.find((row) => row.caddy.id === currentId) ||
       null;
-    if (current && isOperationalPickerCaddy(current.caddy)) {
-      push({
-        caddy: cloneCaddy(current.caddy),
-        group: "current",
-        reservationKey: reservationKey(current.reservation),
-        teeTime: current.reservation.teeTime,
-        teamName: current.reservation.teamName,
-      });
+    if (current && isListedBoardCaddy(current.caddy)) {
+      push(
+        {
+          caddy: cloneCaddy(current.caddy),
+          group: "current",
+          reservationKey: reservationKey(current.reservation),
+          teeTime: current.reservation.teeTime,
+          teamName: current.reservation.teamName,
+        },
+        { requireAssignable: false }
+      );
     }
   }
 
@@ -376,7 +390,7 @@ export function listDirectEditCandidates(
     (row) =>
       assignmentShift(row) !== shift &&
       !isDirectEditVacant(row) &&
-      isOperationalPickerCaddy(row.caddy) &&
+      isAssignablePickerCaddy(row.caddy) &&
       !assignedIds.has(row.caddy.id)
   );
 
@@ -429,7 +443,7 @@ function offerSpare(
   shift: ShiftPart | string,
   caddy: AutoAssignCaddy
 ): SpareByShift[] {
-  if (!isOperationalPickerCaddy(caddy)) return spares;
+  if (!isAssignablePickerCaddy(caddy)) return spares;
   const info = toSpareInfo(caddy);
   const shiftKey = String(shift);
   let found = false;
@@ -820,7 +834,7 @@ export function applyDirectCaddyEdit(
       message: DIRECT_EDIT_CADDY_NOT_FOUND_MESSAGE,
     };
   }
-  if (!isOperationalPickerCaddy(caddy)) {
+  if (!isAssignablePickerCaddy(caddy)) {
     return {
       ok: false,
       code: "NOT_OPERATIONAL",

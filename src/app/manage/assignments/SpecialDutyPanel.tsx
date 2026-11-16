@@ -25,6 +25,7 @@ import {
   type SpecialStartAnchor,
 } from "@/lib/dailySpecialDuty";
 import { formatCaddyLabel } from "@/lib/caddyDisplay";
+import { isAssignableEmploymentStatus } from "@/lib/assignableRoster";
 import {
   computeShift1SpecialWindow,
   formatShift1Range,
@@ -255,7 +256,11 @@ export const SpecialDutyPanel = memo(function SpecialDutyPanel({
     const q = normalizePersonName(query);
     if (!q) return [];
     return caddies
-      .filter((c) => normalizePersonName(c.name).includes(q))
+      .filter(
+        (c) =>
+          isAssignableEmploymentStatus(c.employmentStatus) &&
+          normalizePersonName(c.name).includes(q)
+      )
       .slice(0, 12);
   }, [caddies, query]);
 

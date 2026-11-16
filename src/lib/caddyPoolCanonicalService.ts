@@ -45,6 +45,7 @@ import {
   type AutoAssignCaddy,
   type UnavailableFromShiftRow,
 } from "@/lib/autoAssignEngine";
+import { overlayLatestEmploymentStatus } from "@/lib/assignableRoster";
 
 export type CanonicalOffSheetMode = "cache" | "fetch" | "cache-or-fetch" | "snapshot";
 
@@ -362,13 +363,21 @@ export async function loadCanonicalReflowState(
   const sotUsable = regularCaddyPoolFromAvailabilityRows(
     overlaid.available.all
   );
-  const rosterBaseline = recoverRosterBaseline({
+  const clientWithEmployment = overlayLatestEmploymentStatus(
     clientPool,
+    caddies
+  );
+  const computeClientWithEmployment = overlayLatestEmploymentStatus(
+    opts?.computeClientPool ?? clientPool,
+    caddies
+  );
+  const rosterBaseline = recoverRosterBaseline({
+    clientPool: clientWithEmployment,
     sotBaseline,
     offSheetMatched,
   });
   const computePool = recoverComputePool({
-    clientPool: opts?.computeClientPool ?? clientPool,
+    clientPool: computeClientWithEmployment,
     sotUsable: usableComputePool({
       rosterBaseline: sotUsable,
       unavailableIds,

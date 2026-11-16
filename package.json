@@ -109,6 +109,7 @@
     "test:auto-assign-acceptance": "bash scripts/tsx-safe.sh scripts/test-auto-assign-acceptance-ops-rules.ts",
     "test:assignment-change-reflow-unit": "bash scripts/tsx-safe.sh scripts/test-assignment-change-reflow-unit.ts",
     "test:caddy-pool-canonical-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-pool-canonical-unit.ts",
+    "test:assignable-roster-unit": "bash scripts/tsx-safe.sh scripts/test-assignable-roster-unit.ts",
     "test:sick-house-order-unit": "bash scripts/tsx-safe.sh scripts/test-sick-house-order-unit.ts",
     "test:sick-house-order-persist-local": "bash scripts/tsx-safe.sh scripts/test-sick-house-order-persist-local.ts",
     "test:off-sheet-cold-cache-unit": "bash scripts/tsx-safe.sh scripts/test-off-sheet-cold-cache-unit.ts",
