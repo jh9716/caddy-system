@@ -665,7 +665,6 @@ section("git protected files");
         "--name-only",
         "origin/main",
         "--",
-        "src/lib/autoAssignEngine.ts",
         "src/lib/opsDutyEffective.ts",
         "src/lib/cartManage.ts",
         "src/lib/cartService.ts",

@@ -201,13 +201,14 @@ section("source contracts");
         "--name-only",
         "origin/main",
         "--",
-        "src/lib/autoAssignEngine.ts",
         "src/lib/dailySpecialSupport.ts",
         "src/lib/operationalRoster.ts",
       ],
       { encoding: "utf8" }
     ).stdout || ""
   ).trim();
+  // autoAssignEngine.ts may change in later assignment-eligibility PRs;
+  // marshal source still must not import it (asserted above).
   assert(names === "", `protected files 0 (${names || "clean"})`);
 }
 
