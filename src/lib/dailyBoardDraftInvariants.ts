@@ -172,7 +172,7 @@ export async function loadTrustedCaddyIdsFromDb(
   );
 }
 
-/** Latest Caddy.employmentStatus for placed ids. null = lookup unavailable (tests). */
+/** Latest Caddy.employmentStatus for placed ids. null = lookup unavailable. */
 export async function loadCaddyEmploymentFromDb(
   db: unknown,
   ids: readonly number[]
@@ -185,15 +185,19 @@ export async function loadCaddyEmploymentFromDb(
   if (!lookup) return null;
   const unique = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
   if (unique.length === 0) return [];
-  const rows = await lookup.caddy.findMany({
-    where: { id: { in: unique } },
-    select: { id: true, name: true, employmentStatus: true },
-  });
-  return rows.map((row) => ({
-    id: Number(row.id),
-    name: row.name ?? null,
-    employmentStatus: row.employmentStatus ?? null,
-  }));
+  try {
+    const rows = await lookup.caddy.findMany({
+      where: { id: { in: unique } },
+      select: { id: true, name: true, employmentStatus: true },
+    });
+    return rows.map((row) => ({
+      id: Number(row.id),
+      name: row.name ?? null,
+      employmentStatus: row.employmentStatus ?? null,
+    }));
+  } catch {
+    return null;
+  }
 }
 
 export function assertDailyBoardDraftInvariants(

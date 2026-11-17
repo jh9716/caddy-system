@@ -18,6 +18,12 @@ import {
 
 export const INACTIVE_EMPLOYMENT_WARNING_CODE = "INACTIVE_EMPLOYMENT";
 export const PUBLISH_INACTIVE_EMPLOYMENT_CODE = "INACTIVE_EMPLOYMENT";
+export const PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_CODE =
+  "EMPLOYMENT_LOOKUP_UNAVAILABLE";
+export const PUBLISH_UNKNOWN_CADDY_CODE = "UNKNOWN_CADDY";
+
+export const PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_MESSAGE =
+  "캐디 재직 상태를 확인할 수 없어 공개할 수 없습니다.";
 
 export type AssignableEmploymentRow = {
   id?: number;
@@ -33,6 +39,15 @@ export type PlacedCaddyRef = {
   id: number;
   name: string;
 };
+
+export function unknownPlacedCaddyMessage(
+  missing: readonly PlacedCaddyRef[]
+): string {
+  const who = missing
+    .map((person) => `${person.name}(#${person.id})`)
+    .join(", ");
+  return `존재하지 않는 캐디가 배치되어 있어 공개할 수 없습니다: ${who}`;
+}
 
 export type InactiveEmploymentIssue = {
   caddyId: number;
@@ -239,4 +254,17 @@ export function inactiveEmploymentIssuesFromDb(
     found.map((row) => ({ ...row, message: "" }))
   );
   return found.map((row) => ({ ...row, message: summary }));
+}
+
+export function missingPlacedCaddyRefs(
+  placed: readonly PlacedCaddyRef[],
+  dbRows: readonly AssignableEmploymentRow[] | null | undefined
+): PlacedCaddyRef[] {
+  const found = new Set<number>();
+  for (const row of dbRows || []) {
+    const id = positiveCaddyId(row);
+    if (id == null) continue;
+    found.add(id);
+  }
+  return placed.filter((person) => !found.has(person.id));
 }

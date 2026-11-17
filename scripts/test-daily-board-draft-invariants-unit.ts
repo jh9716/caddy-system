@@ -225,7 +225,11 @@ function createMemoryDraftDb(
         return ids
           .map((id) => Number(id))
           .filter((id) => caddySet.has(id))
-          .map((id) => ({ id }));
+          .map((id) => ({
+            id,
+            name: `C${id}`,
+            employmentStatus: "ACTIVE",
+          }));
       },
     },
     $transaction: async (fn) => fn(api),

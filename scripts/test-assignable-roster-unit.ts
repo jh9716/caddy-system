@@ -27,7 +27,9 @@ import {
   inactiveEmploymentIssuesFromDb,
   isAssignableCaddy,
   isAssignableEmploymentStatus,
+  missingPlacedCaddyRefs,
   overlayLatestEmploymentStatus,
+  unknownPlacedCaddyMessage,
 } from "../src/lib/assignableRoster";
 import {
   computeAutoAssignmentsV1,
@@ -552,6 +554,17 @@ section("공개 확정은 휴직·퇴사 배치를 차단하고 대상을 안내
     ),
     "publish copy mentions 공개 차단"
   );
+  const missing = missingPlacedCaddyRefs(placed, [
+    { id: 2, employmentStatus: "ACTIVE" },
+  ]);
+  assert(
+    missing.map((p) => p.id).join(",") === "1,3",
+    "missing assignment and spare ids"
+  );
+  assert(
+    /#1/.test(unknownPlacedCaddyMessage(missing)),
+    "unknown caddy message includes id"
+  );
 }
 
 section("휴직 → 재직 복귀 후 다시 배치 가능");
@@ -625,6 +638,26 @@ section("페이지·엔진 경로가 배치 가능 필터를 쓰는지");
   assert(
     publishSrc.includes("assertAssignableEmploymentForPublish"),
     "publish checks latest employment"
+  );
+  assert(
+    publishSrc.includes("PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_CODE"),
+    "publish fail-closed when employment lookup is unavailable"
+  );
+  assert(
+    publishSrc.includes("missingPlacedCaddyRefs"),
+    "publish blocks placed ids missing from DB"
+  );
+  const invariantsSrc = readFileSync(
+    join(process.cwd(), "src/lib/dailyBoardDraftInvariants.ts"),
+    "utf8"
+  );
+  const loadEmploymentFn = invariantsSrc.slice(
+    invariantsSrc.indexOf("export async function loadCaddyEmploymentFromDb"),
+    invariantsSrc.indexOf("export function assertDailyBoardDraftInvariants")
+  );
+  assert(
+    loadEmploymentFn.includes("catch") && loadEmploymentFn.includes("return null"),
+    "employment lookup errors surface as unavailable"
   );
   assert(
     confirmSrc.includes("inactiveEmploymentIssuesFromDb"),

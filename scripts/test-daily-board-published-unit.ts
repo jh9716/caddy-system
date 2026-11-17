@@ -9,7 +9,11 @@ import {
   assignmentDraftToPayload,
   DailyBoardDraftPayloadError,
 } from "../src/lib/dailyBoardDraft";
-import { PUBLISH_INACTIVE_EMPLOYMENT_CODE } from "../src/lib/assignableRoster";
+import {
+  PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_CODE,
+  PUBLISH_INACTIVE_EMPLOYMENT_CODE,
+  PUBLISH_UNKNOWN_CADDY_CODE,
+} from "../src/lib/assignableRoster";
 import {
   saveDailyBoardDraft,
   type DailyBoardDraftDb,
@@ -26,6 +30,7 @@ import {
 import {
   DailyBoardPublishNoDraftError,
   DailyBoardPublishStaleError,
+  assertAssignableEmploymentForPublish,
   getDailyBoardPublished,
   publishDailyBoard,
   type DailyBoardPublishedDb,
@@ -226,6 +231,8 @@ function createMemoryDb(opts?: {
     number,
     { name?: string; employmentStatus: string }
   >;
+  absentIds?: Iterable<number>;
+  omitCaddyLookup?: boolean;
 }) {
   const drafts = new Map<number, DraftRow>();
   const published = new Map<number, PublishedRow>();
@@ -233,6 +240,9 @@ function createMemoryDb(opts?: {
   let scheduleWrites = 0;
   const keyOf = (d: Date) => d.getTime();
   const employmentById = opts?.employmentById;
+  const absentIds = new Set(
+    [...(opts?.absentIds || [])].map((id) => Number(id)).filter((id) => id > 0)
+  );
 
   const api: Record<string, unknown> = {
     dailyBoardDraft: {
@@ -344,7 +354,7 @@ function createMemoryDb(opts?: {
       fn(api as unknown as PublishDailyBoardDb),
   };
 
-  if (employmentById) {
+  if (!opts?.omitCaddyLookup) {
     api.caddy = {
       findMany: async ({
         where,
@@ -354,13 +364,13 @@ function createMemoryDb(opts?: {
         const ids = Array.isArray(where?.id?.in) ? where.id.in : [];
         return ids
           .map((id) => Number(id))
-          .filter((id) => employmentById.has(id))
+          .filter((id) => Number.isInteger(id) && id > 0 && !absentIds.has(id))
           .map((id) => {
-            const row = employmentById.get(id)!;
+            const row = employmentById?.get(id);
             return {
               id,
-              name: row.name || `C${id}`,
-              employmentStatus: row.employmentStatus,
+              name: row?.name || `C${id}`,
+              employmentStatus: row?.employmentStatus || "ACTIVE",
             };
           });
       },
@@ -1607,6 +1617,162 @@ async function main() {
       "RETIRED publish blocked"
     );
     assert(/퇴사/.test(retiredErr?.message || ""), "RETIRED publish names 퇴사");
+  }
+
+  section("publish fail-closed when employment lookup is unavailable");
+  {
+    const date = "2026-11-15";
+    const draft = makeDraft(date);
+    const omitted = createMemoryDb({ omitCaddyLookup: true });
+    const savedOmit = await saveDailyBoardDraft({
+      date,
+      expectedVersion: 0,
+      payload: assignmentDraftToPayload(draft),
+      updatedByUserId: 7,
+      db: omitted.db,
+    });
+    let omitErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await publishDailyBoard({
+        date,
+        expectedDraftVersion: savedOmit.version,
+        publishedByUserId: 7,
+        db: omitted.db,
+      });
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) omitErr = e;
+    }
+    assert(
+      omitErr?.code === PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_CODE,
+      "missing caddy lookup blocks publish"
+    );
+    assert(
+      (await getDailyBoardPublished(date, omitted.db)) == null,
+      "lookup skip does not write Published"
+    );
+
+    const throwing = createMemoryDb();
+    (
+      throwing.db as unknown as {
+        caddy: { findMany: () => Promise<unknown> };
+      }
+    ).caddy.findMany = async () => {
+      throw new Error("caddy lookup down");
+    };
+    let throwErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await assertAssignableEmploymentForPublish(
+        assignmentDraftToPayload(makeDraft("2026-11-17")),
+        throwing.db
+      );
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) throwErr = e;
+    }
+    assert(
+      throwErr?.code === PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_CODE,
+      "caddy lookup throw blocks publish"
+    );
+  }
+
+  section("publish blocks missing assignment and spare caddy ids");
+  {
+    const date = "2026-11-16";
+    const payload = assignmentDraftToPayload(makeDraft(date));
+    const mem = createMemoryDb({ absentIds: [888888, 777777] });
+    let missingAssignErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await assertAssignableEmploymentForPublish(
+        {
+          ...payload,
+          assignments: payload.assignments.map((row, i) =>
+            i === 0
+              ? { ...row, caddy: { ...row.caddy, id: 888888, name: "유령배치" } }
+              : row
+          ),
+        },
+        mem.db
+      );
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) missingAssignErr = e;
+    }
+    assert(
+      missingAssignErr?.code === PUBLISH_UNKNOWN_CADDY_CODE,
+      "missing assignment id blocks publish"
+    );
+    assert(
+      /유령배치\(#888888\)/.test(missingAssignErr?.message || ""),
+      "missing assignment message includes name and id"
+    );
+
+    let missingSpareErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await assertAssignableEmploymentForPublish(
+        {
+          ...payload,
+          sparesByShift: [
+            {
+              spare1: { caddyId: 777777, name: "유령스페어" },
+              spare2: null,
+            },
+          ],
+        },
+        mem.db
+      );
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) missingSpareErr = e;
+    }
+    assert(
+      missingSpareErr?.code === PUBLISH_UNKNOWN_CADDY_CODE,
+      "missing spare id blocks publish"
+    );
+    assert(
+      /유령스페어\(#777777\)/.test(missingSpareErr?.message || ""),
+      "missing spare message includes name and id"
+    );
+
+    const saved = await saveDailyBoardDraft({
+      date,
+      expectedVersion: 0,
+      payload,
+      updatedByUserId: 7,
+      db: mem.db,
+    });
+    const published = await publishDailyBoard({
+      date,
+      expectedDraftVersion: saved.version,
+      publishedByUserId: 7,
+      db: mem.db,
+    });
+    const stored = mem.drafts.values().next().value as DraftRow;
+    const poisoned = stored.payload as {
+      sparesByShift: Array<{
+        spare1?: { caddyId?: number; name?: string | null } | null;
+      }>;
+    };
+    poisoned.sparesByShift[0].spare1 = {
+      caddyId: 777777,
+      name: "유령스페어",
+    };
+    let republishErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await publishDailyBoard({
+        date,
+        expectedDraftVersion: saved.version,
+        publishedByUserId: 7,
+        db: mem.db,
+      });
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) republishErr = e;
+    }
+    assert(
+      republishErr?.code === PUBLISH_UNKNOWN_CADDY_CODE,
+      "republish missing spare blocked"
+    );
+    assert(
+      (await getDailyBoardPublished(date, mem.db))?.payload.placements.length ===
+        published.payload.placements.length,
+      "missing spare republish keeps Published"
+    );
   }
 
   section("today/yesterday helpers");
