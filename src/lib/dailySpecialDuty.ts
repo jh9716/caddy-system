@@ -469,6 +469,7 @@ function toEngineCaddy(row: SpecialDutyRecord): EngineSpecialCaddy {
     team: row.team || "",
     teamOrder: Number(row.teamOrder) || 0,
     caddyType: row.caddyType ?? undefined,
+    employmentStatus: row.employmentStatus,
     inputOrder: row.sortOrder,
     specialCourse: row.course ?? null,
     specialTeeTime: row.teeTime ?? null,

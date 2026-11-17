@@ -30,6 +30,7 @@ import {
   confirmedDraftKeepingPlacedUnavailable,
   liveClickSnapshotPool,
   unusedCaddies,
+  applyLatestEmploymentToDraft,
   type AssignmentDraft,
   type DraftWarning,
 } from "@/lib/assignmentDraft";
@@ -151,7 +152,13 @@ import {
   offCaddiesFromRoster,
   unavailablePanelTotal,
 } from "@/lib/assignmentBoardDirectEdit";
-import { isOperationalEmploymentStatus, mergeOperationalRoster } from "@/lib/operationalRoster";
+import {
+  INACTIVE_EMPLOYMENT_WARNING_CODE,
+  employmentRowsFromAvailability,
+  isAssignableEmploymentStatus,
+  overlayLatestEmploymentStatus,
+} from "@/lib/assignableRoster";
+import { mergeOperationalRoster } from "@/lib/operationalRoster";
 import {
   buildUnavailableBoardView,
   pickOpsStatusSummary,
@@ -836,6 +843,17 @@ export default function ManageAssignmentsOpsPage() {
   const dateSettingsRef = useRef<HTMLDetailsElement | null>(null);
   draftRef.current = draft;
   autoResultRef.current = autoResult;
+  const availabilityRef = useRef(availability);
+  availabilityRef.current = availability;
+
+  function overlayDraftEmployment(source: AssignmentDraft): AssignmentDraft {
+    return (
+      applyLatestEmploymentToDraft(
+        source,
+        employmentRowsFromAvailability(availabilityRef.current)
+      ) || source
+    );
+  }
 
   const applyHydratedDraft = useCallback(
     (
@@ -853,7 +871,7 @@ export default function ManageAssignmentsOpsPage() {
           ? unavailableIds
           : assignmentDraft.unavailableCaddyIds || []
       ).filter((id) => Number.isInteger(id) && id > 0);
-      const incoming: AssignmentDraft = {
+      const incoming: AssignmentDraft = overlayDraftEmployment({
         ...assignmentDraft,
         unavailableCaddyIds: liveUnavailableIds,
         ...(unavailableFromShift && unavailableFromShift.length > 0
@@ -861,7 +879,7 @@ export default function ManageAssignmentsOpsPage() {
           : assignmentDraft.unavailableFromShift
             ? { unavailableFromShift: assignmentDraft.unavailableFromShift }
             : {}),
-      };
+      });
       const hydrated = confirmedDraftKeepingPlacedUnavailable(incoming);
       setDraft(hydrated);
       confirmedDraftRef.current = hydrated;
@@ -1613,7 +1631,7 @@ export default function ManageAssignmentsOpsPage() {
       .filter(
         (r) =>
           isHouseStartCandidate(r) &&
-          isOperationalEmploymentStatus(
+          isAssignableEmploymentStatus(
             "employmentStatus" in r ? r.employmentStatus : undefined
           )
       )
@@ -1663,29 +1681,47 @@ export default function ManageAssignmentsOpsPage() {
   }
 
   const opsDutyCaddyIds = opsDutyStored?.caddyIds || [];
+  const liveDraft = useMemo(
+    () =>
+      (draft
+        ? applyLatestEmploymentToDraft(
+            draft,
+            employmentRowsFromAvailability(availability)
+          )
+        : draft) || draft,
+    [availability, draft]
+  );
+
   const pool: AutoAssignCaddy[] = useMemo(() => {
+    const employmentSource = employmentRowsFromAvailability(availability);
+    const existing = overlayLatestEmploymentStatus(
+      draft?.caddyPool,
+      null,
+      employmentSource
+    );
     const raw = availability
       ? mergeRosterBaseline(
-          draft?.caddyPool,
+          existing,
           rosterBaselineFromAvailability(availability)
         )
-      : draft?.caddyPool || [];
-    return raw.filter((c) => isOperationalEmploymentStatus(c.employmentStatus));
+      : existing;
+    return raw.filter((c) => isAssignableEmploymentStatus(c.employmentStatus));
   }, [availability, draft]);
 
-  const freeCaddies = draft ? unusedCaddies(draft) : [];
-  const drivingCandidates = draft
+  const freeCaddies = liveDraft ? unusedCaddies(liveDraft) : [];
+  const drivingCandidates = liveDraft
     ? drivingCandidateCaddies({
-        pool: excludeCaddiesById(draft.caddyPool, opsDutyCaddyIds),
-        assignedCaddyIds: draft.assignments.map((a) => a.caddy.id),
+        pool: excludeCaddiesById(liveDraft.caddyPool, opsDutyCaddyIds),
+        assignedCaddyIds: liveDraft.assignments.map((a) => a.caddy.id),
         unavailableCaddyIds,
       })
     : [];
-  const liveWarnings = (draft ? detectDraftWarnings(draft) : warnings).filter(
+  const liveWarnings = (liveDraft ? detectDraftWarnings(liveDraft) : warnings).filter(
     (w) =>
       w.code === "SAME_SHIFT_DUPLICATE" ||
       w.code === "TIME_CONFLICT" ||
-      w.code === "SPECIAL_GAP_CONFLICT"
+      w.code === "SPECIAL_GAP_CONFLICT" ||
+      w.code === INACTIVE_EMPLOYMENT_WARNING_CODE
   );
 
   const shiftSpare =
@@ -2018,18 +2054,22 @@ export default function ManageAssignmentsOpsPage() {
       }
       if (draftRef.current && draftRef.current.date === date) {
         const current = draftRef.current;
-        const next = {
-          ...current,
-          ...(dutyIds.length
-            ? {
-                caddyPool: mergeRosterBaseline(
-                  current.caddyPool,
-                  rosterBaselineFromAvailability(data as AvailabilityResult)
-                ),
-              }
-            : {}),
-          offSnapshot,
-        };
+        const next =
+          applyLatestEmploymentToDraft(
+            {
+              ...current,
+              ...(dutyIds.length
+                ? {
+                    caddyPool: mergeRosterBaseline(
+                      current.caddyPool,
+                      rosterBaselineFromAvailability(data as AvailabilityResult)
+                    ),
+                  }
+                : {}),
+              offSnapshot,
+            },
+            employmentRowsFromAvailability(data as AvailabilityResult)
+          ) || current;
         setDraft(next);
         if (confirmedDraftRef.current?.date === date) {
           confirmedDraftRef.current = {
@@ -2157,15 +2197,19 @@ export default function ManageAssignmentsOpsPage() {
           : [];
         if (draftRef.current) {
           const current = draftRef.current;
-          const next = {
-            ...current,
-            caddyPool: mergeRosterBaseline(
-              current.caddyPool,
-              rosterBaselineFromAvailability(
-                availData as AvailabilityResult
-              )
-            ),
-          };
+          const next =
+            applyLatestEmploymentToDraft(
+              {
+                ...current,
+                caddyPool: mergeRosterBaseline(
+                  current.caddyPool,
+                  rosterBaselineFromAvailability(
+                    availData as AvailabilityResult
+                  )
+                ),
+              },
+              employmentRowsFromAvailability(availData as AvailabilityResult)
+            ) || current;
           setDraft(next);
           queueDraftSave(next);
         }
@@ -2286,15 +2330,19 @@ export default function ManageAssignmentsOpsPage() {
         );
         if (draftRef.current) {
           const current = draftRef.current;
-          const next = {
-            ...current,
-            caddyPool: mergeRosterBaseline(
-              current.caddyPool,
-              rosterBaselineFromAvailability(
-                availData as AvailabilityResult
-              )
-            ),
-          };
+          const next =
+            applyLatestEmploymentToDraft(
+              {
+                ...current,
+                caddyPool: mergeRosterBaseline(
+                  current.caddyPool,
+                  rosterBaselineFromAvailability(
+                    availData as AvailabilityResult
+                  )
+                ),
+              },
+              employmentRowsFromAvailability(availData as AvailabilityResult)
+            ) || current;
           setDraft(next);
           queueDraftSave(next);
         }
@@ -2611,14 +2659,15 @@ export default function ManageAssignmentsOpsPage() {
 
   function onReplace(row: AutoAssignmentRow, caddyId: number) {
     if (!draft) return;
+    const current = overlayDraftEmployment(draft);
     const key = reservationIdentity(row.reservation);
-    let result = replaceAssignmentCaddy(draft, key, caddyId);
+    let result = replaceAssignmentCaddy(current, key, caddyId);
     if (result.specialEditWarned) {
       const ok = window.confirm(
         `special 배치(${row.kind}) 캐디를 교체합니다. 계속할까요?`
       );
       if (!ok) return;
-      result = replaceAssignmentCaddy(draft, key, caddyId, {
+      result = replaceAssignmentCaddy(current, key, caddyId, {
         allowSpecialEdit: true,
       });
     }
@@ -2756,7 +2805,9 @@ export default function ManageAssignmentsOpsPage() {
   }
 
   function applyDirectCellPick(row: AutoAssignmentRow, caddyId: number) {
-    const current = draftRef.current;
+    const current = draftRef.current
+      ? overlayDraftEmployment(draftRef.current)
+      : null;
     if (!current) return;
     const key = reservationIdentity(row.reservation);
     const result = applyDirectCaddyEdit(current, {
@@ -2846,7 +2897,7 @@ export default function ManageAssignmentsOpsPage() {
     const extraUsable = availability?.available?.all?.length
       ? regularCaddyPoolFromAvailabilityRows(availability.available.all)
       : computePoolRef.current;
-    const pool = liveClickSnapshotPool(source, {
+    const pool = liveClickSnapshotPool(overlayDraftEmployment(source), {
       extraUsable: extraUsable.length ? extraUsable : undefined,
       liveUnavailableIds: [
         ...(source.unavailableCaddyIds || []),
@@ -3243,7 +3294,11 @@ export default function ManageAssignmentsOpsPage() {
 
   function onAssignUnassigned(resKey: string, caddyId: number) {
     if (!draft) return;
-    const result = assignCaddyToUnassigned(draft, resKey, caddyId);
+    const result = assignCaddyToUnassigned(
+      overlayDraftEmployment(draft),
+      resKey,
+      caddyId
+    );
     if (result.warnings.some((w) => w.code === "SAME_SHIFT_DUPLICATE")) {
       setWarnings(result.warnings);
       showToast(result.warnings[0]?.message || "같은 부에 동일 캐디를 둘 수 없습니다.");
@@ -5166,7 +5221,7 @@ export default function ManageAssignmentsOpsPage() {
         )}
       {cellEditKey && cellEditRow && draft && (
         <CaddyCellEditSheet
-          draft={draft}
+          draft={liveDraft || draft}
           row={cellEditRow}
           unavailableCaddyIds={unavailableCaddyIds}
           onClose={() => setCellEditKey(null)}

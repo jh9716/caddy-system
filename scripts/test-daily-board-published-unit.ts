@@ -5,7 +5,15 @@
 import fs from "fs";
 import path from "path";
 import { NextRequest } from "next/server";
-import { assignmentDraftToPayload } from "../src/lib/dailyBoardDraft";
+import {
+  assignmentDraftToPayload,
+  DailyBoardDraftPayloadError,
+} from "../src/lib/dailyBoardDraft";
+import {
+  PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_CODE,
+  PUBLISH_INACTIVE_EMPLOYMENT_CODE,
+  PUBLISH_UNKNOWN_CADDY_CODE,
+} from "../src/lib/assignableRoster";
 import {
   saveDailyBoardDraft,
   type DailyBoardDraftDb,
@@ -22,6 +30,7 @@ import {
 import {
   DailyBoardPublishNoDraftError,
   DailyBoardPublishStaleError,
+  assertAssignableEmploymentForPublish,
   getDailyBoardPublished,
   publishDailyBoard,
   type DailyBoardPublishedDb,
@@ -217,14 +226,25 @@ type PublishedRow = {
   updatedAt: Date;
 };
 
-function createMemoryDb() {
+function createMemoryDb(opts?: {
+  employmentById?: Map<
+    number,
+    { name?: string; employmentStatus: string }
+  >;
+  absentIds?: Iterable<number>;
+  omitCaddyLookup?: boolean;
+}) {
   const drafts = new Map<number, DraftRow>();
   const published = new Map<number, PublishedRow>();
   let shiftDutyWrites = 0;
   let scheduleWrites = 0;
   const keyOf = (d: Date) => d.getTime();
+  const employmentById = opts?.employmentById;
+  const absentIds = new Set(
+    [...(opts?.absentIds || [])].map((id) => Number(id)).filter((id) => id > 0)
+  );
 
-  const api = {
+  const api: Record<string, unknown> = {
     dailyBoardDraft: {
       findUnique: async ({ where }: { where: { date: Date } }) => {
         const row = drafts.get(keyOf(where.date));
@@ -333,6 +353,29 @@ function createMemoryDb() {
     $transaction: async <T>(fn: (tx: PublishDailyBoardDb) => Promise<T>) =>
       fn(api as unknown as PublishDailyBoardDb),
   };
+
+  if (!opts?.omitCaddyLookup) {
+    api.caddy = {
+      findMany: async ({
+        where,
+      }: {
+        where: { id: { in: number[] } };
+      }) => {
+        const ids = Array.isArray(where?.id?.in) ? where.id.in : [];
+        return ids
+          .map((id) => Number(id))
+          .filter((id) => Number.isInteger(id) && id > 0 && !absentIds.has(id))
+          .map((id) => {
+            const row = employmentById?.get(id);
+            return {
+              id,
+              name: row?.name || `C${id}`,
+              employmentStatus: row?.employmentStatus || "ACTIVE",
+            };
+          });
+      },
+    };
+  }
 
   return {
     db: api as unknown as PublishDailyBoardDb & DailyBoardDraftDb & DailyBoardPublishedDb,
@@ -1486,6 +1529,250 @@ async function main() {
     assert(busy.label === PUBLISH_BUSY_LABEL, "busy label");
     assert(busy.disabled === true, "busy disabled");
     assert(PUBLISH_HINT.includes("캐디 공용 배치표"), "hint copy");
+  }
+
+  section("publish blocks LEAVE/RETIRED and keeps existing Published");
+  {
+    const date = "2026-11-14";
+    const draft = makeDraft(date);
+    const leaveId = draft.assignments[0].caddy.id;
+    const retiredId = draft.assignments[1]?.caddy.id || leaveId;
+    const employmentById = new Map(
+      draft.assignments.map((row) => [
+        row.caddy.id,
+        {
+          name: row.caddy.name,
+          employmentStatus: "ACTIVE",
+        },
+      ])
+    );
+    const mem = createMemoryDb({ employmentById });
+    const saved = await saveDailyBoardDraft({
+      date,
+      expectedVersion: 0,
+      payload: assignmentDraftToPayload(draft),
+      updatedByUserId: 7,
+      db: mem.db,
+    });
+    const published = await publishDailyBoard({
+      date,
+      expectedDraftVersion: saved.version,
+      publishedByUserId: 7,
+      db: mem.db,
+    });
+    assert(
+      published.payload.placements.length === saved.payload.assignments.length,
+      "ACTIVE publish ok"
+    );
+
+    employmentById.set(leaveId, {
+      name: draft.assignments[0].caddy.name,
+      employmentStatus: "LEAVE",
+    });
+    const kept = await getDailyBoardPublished(date, mem.db);
+    assert(
+      kept?.payload.placements.length === published.payload.placements.length,
+      "GET published still returns prior snapshot"
+    );
+    let leaveErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await publishDailyBoard({
+        date,
+        expectedDraftVersion: saved.version,
+        publishedByUserId: 7,
+        db: mem.db,
+      });
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) leaveErr = e;
+    }
+    assert(leaveErr?.code === PUBLISH_INACTIVE_EMPLOYMENT_CODE, "LEAVE publish blocked");
+    assert(/휴직/.test(leaveErr?.message || ""), "LEAVE publish names 휴직");
+    assert(
+      (await getDailyBoardPublished(date, mem.db))?.payload.placements.length ===
+        published.payload.placements.length,
+      "blocked republish does not rewrite Published"
+    );
+
+    employmentById.set(leaveId, {
+      name: draft.assignments[0].caddy.name,
+      employmentStatus: "ACTIVE",
+    });
+    employmentById.set(retiredId, {
+      name: draft.assignments.find((row) => row.caddy.id === retiredId)?.caddy.name || "퇴사",
+      employmentStatus: "RETIRED",
+    });
+    let retiredErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await publishDailyBoard({
+        date,
+        expectedDraftVersion: saved.version,
+        publishedByUserId: 7,
+        db: mem.db,
+      });
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) retiredErr = e;
+    }
+    assert(
+      retiredErr?.code === PUBLISH_INACTIVE_EMPLOYMENT_CODE,
+      "RETIRED publish blocked"
+    );
+    assert(/퇴사/.test(retiredErr?.message || ""), "RETIRED publish names 퇴사");
+  }
+
+  section("publish fail-closed when employment lookup is unavailable");
+  {
+    const date = "2026-11-15";
+    const draft = makeDraft(date);
+    const omitted = createMemoryDb({ omitCaddyLookup: true });
+    const savedOmit = await saveDailyBoardDraft({
+      date,
+      expectedVersion: 0,
+      payload: assignmentDraftToPayload(draft),
+      updatedByUserId: 7,
+      db: omitted.db,
+    });
+    let omitErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await publishDailyBoard({
+        date,
+        expectedDraftVersion: savedOmit.version,
+        publishedByUserId: 7,
+        db: omitted.db,
+      });
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) omitErr = e;
+    }
+    assert(
+      omitErr?.code === PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_CODE,
+      "missing caddy lookup blocks publish"
+    );
+    assert(
+      (await getDailyBoardPublished(date, omitted.db)) == null,
+      "lookup skip does not write Published"
+    );
+
+    const throwing = createMemoryDb();
+    (
+      throwing.db as unknown as {
+        caddy: { findMany: () => Promise<unknown> };
+      }
+    ).caddy.findMany = async () => {
+      throw new Error("caddy lookup down");
+    };
+    let throwErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await assertAssignableEmploymentForPublish(
+        assignmentDraftToPayload(makeDraft("2026-11-17")),
+        throwing.db
+      );
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) throwErr = e;
+    }
+    assert(
+      throwErr?.code === PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_CODE,
+      "caddy lookup throw blocks publish"
+    );
+  }
+
+  section("publish blocks missing assignment and spare caddy ids");
+  {
+    const date = "2026-11-16";
+    const payload = assignmentDraftToPayload(makeDraft(date));
+    const mem = createMemoryDb({ absentIds: [888888, 777777] });
+    let missingAssignErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await assertAssignableEmploymentForPublish(
+        {
+          ...payload,
+          assignments: payload.assignments.map((row, i) =>
+            i === 0
+              ? { ...row, caddy: { ...row.caddy, id: 888888, name: "유령배치" } }
+              : row
+          ),
+        },
+        mem.db
+      );
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) missingAssignErr = e;
+    }
+    assert(
+      missingAssignErr?.code === PUBLISH_UNKNOWN_CADDY_CODE,
+      "missing assignment id blocks publish"
+    );
+    assert(
+      /유령배치\(#888888\)/.test(missingAssignErr?.message || ""),
+      "missing assignment message includes name and id"
+    );
+
+    let missingSpareErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await assertAssignableEmploymentForPublish(
+        {
+          ...payload,
+          sparesByShift: [
+            {
+              spare1: { caddyId: 777777, name: "유령스페어" },
+              spare2: null,
+            },
+          ],
+        },
+        mem.db
+      );
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) missingSpareErr = e;
+    }
+    assert(
+      missingSpareErr?.code === PUBLISH_UNKNOWN_CADDY_CODE,
+      "missing spare id blocks publish"
+    );
+    assert(
+      /유령스페어\(#777777\)/.test(missingSpareErr?.message || ""),
+      "missing spare message includes name and id"
+    );
+
+    const saved = await saveDailyBoardDraft({
+      date,
+      expectedVersion: 0,
+      payload,
+      updatedByUserId: 7,
+      db: mem.db,
+    });
+    const published = await publishDailyBoard({
+      date,
+      expectedDraftVersion: saved.version,
+      publishedByUserId: 7,
+      db: mem.db,
+    });
+    const stored = mem.drafts.values().next().value as DraftRow;
+    const poisoned = stored.payload as {
+      sparesByShift: Array<{
+        spare1?: { caddyId?: number; name?: string | null } | null;
+      }>;
+    };
+    poisoned.sparesByShift[0].spare1 = {
+      caddyId: 777777,
+      name: "유령스페어",
+    };
+    let republishErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await publishDailyBoard({
+        date,
+        expectedDraftVersion: saved.version,
+        publishedByUserId: 7,
+        db: mem.db,
+      });
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) republishErr = e;
+    }
+    assert(
+      republishErr?.code === PUBLISH_UNKNOWN_CADDY_CODE,
+      "republish missing spare blocked"
+    );
+    assert(
+      (await getDailyBoardPublished(date, mem.db))?.payload.placements.length ===
+        published.payload.placements.length,
+      "missing spare republish keeps Published"
+    );
   }
 
   section("today/yesterday helpers");

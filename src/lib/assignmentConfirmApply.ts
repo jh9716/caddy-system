@@ -13,6 +13,11 @@ import {
   type ConfirmPersistPlan,
   type ConfirmRequestBody,
 } from "@/lib/assignmentConfirm";
+import {
+  INACTIVE_EMPLOYMENT_WARNING_CODE,
+  collectPlacedCaddyRefs,
+  inactiveEmploymentIssuesFromDb,
+} from "@/lib/assignableRoster";
 
 export const AUDIT_ACTION = "ASSIGNMENTS_CONFIRM";
 export const AUDIT_ENTITY = "AssignmentConfirm";
@@ -201,10 +206,10 @@ export async function applyConfirmedAssignments(
   const req: ConfirmRequestBody = parsed.value;
   const plan = buildConfirmPersistPlan(req);
 
-  // 없는 caddyId 거부
+  // 없는 caddyId 거부 + 최신 재직 상태 차단
   const found = await db.caddy.findMany({
     where: { id: { in: plan.caddyIds } },
-    select: { id: true },
+    select: { id: true, name: true, employmentStatus: true },
   });
   const foundSet = new Set(found.map((c) => c.id));
   const missing = plan.caddyIds.filter((id) => !foundSet.has(id));
@@ -218,6 +223,23 @@ export async function applyConfirmedAssignments(
         code: "UNKNOWN_CADDY",
         message: `caddyId ${caddyId} 없음`,
         caddyId,
+      })),
+    };
+  }
+  const inactive = inactiveEmploymentIssuesFromDb(
+    collectPlacedCaddyRefs({ assignments: req.assignments }),
+    found
+  );
+  if (inactive.length > 0) {
+    return {
+      ok: false,
+      httpStatus: 400,
+      code: INACTIVE_EMPLOYMENT_WARNING_CODE,
+      message: inactive[0].message,
+      issues: inactive.map((issue) => ({
+        code: INACTIVE_EMPLOYMENT_WARNING_CODE,
+        message: issue.message,
+        caddyId: issue.caddyId,
       })),
     };
   }

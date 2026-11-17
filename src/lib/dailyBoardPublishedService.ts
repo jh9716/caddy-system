@@ -4,8 +4,21 @@
  */
 
 import { parseYmd } from "@/lib/availabilityEngine";
+import {
+  collectPlacedCaddyRefs,
+  inactiveEmploymentIssuesFromDb,
+  missingPlacedCaddyRefs,
+  PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_CODE,
+  PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_MESSAGE,
+  PUBLISH_INACTIVE_EMPLOYMENT_CODE,
+  PUBLISH_UNKNOWN_CADDY_CODE,
+  unknownPlacedCaddyMessage,
+} from "@/lib/assignableRoster";
 import { DailyBoardDraftPayloadError } from "@/lib/dailyBoardDraft";
-import { assertDailyBoardDraftWriteInvariants } from "@/lib/dailyBoardDraftInvariants";
+import {
+  assertDailyBoardDraftWriteInvariants,
+  loadCaddyEmploymentFromDb,
+} from "@/lib/dailyBoardDraftInvariants";
 import {
   getDailyBoardDraft,
   type DailyBoardDraftDb,
@@ -170,6 +183,7 @@ export async function publishDailyBoard(input: {
   }
   try {
     await assertDailyBoardDraftWriteInvariants(draft.payload, db);
+    await assertAssignableEmploymentForPublish(draft.payload, db);
   } catch (e) {
     if (e instanceof DailyBoardDraftPayloadError) throw e;
     throw e;
@@ -206,6 +220,45 @@ export async function publishDailyBoard(input: {
     totalMs: t3 - t0,
   });
   return toRecord(row, input.date);
+}
+
+export async function assertAssignableEmploymentForPublish(
+  payload: {
+    assignments?: readonly {
+      caddy?: { id?: number; name?: string | null } | null;
+    }[];
+    sparesByShift?: readonly {
+      spare1?: { caddyId?: number; name?: string | null } | null;
+      spare2?: { caddyId?: number; name?: string | null } | null;
+    }[];
+  },
+  db?: unknown
+): Promise<void> {
+  const placed = collectPlacedCaddyRefs(payload);
+  if (placed.length === 0) return;
+  const rows = await loadCaddyEmploymentFromDb(
+    db,
+    placed.map((person) => person.id)
+  );
+  if (rows == null) {
+    throw new DailyBoardDraftPayloadError(
+      PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_MESSAGE,
+      PUBLISH_EMPLOYMENT_LOOKUP_UNAVAILABLE_CODE
+    );
+  }
+  const missing = missingPlacedCaddyRefs(placed, rows);
+  if (missing.length > 0) {
+    throw new DailyBoardDraftPayloadError(
+      unknownPlacedCaddyMessage(missing),
+      PUBLISH_UNKNOWN_CADDY_CODE
+    );
+  }
+  const issues = inactiveEmploymentIssuesFromDb(placed, rows);
+  if (issues.length === 0) return;
+  throw new DailyBoardDraftPayloadError(
+    issues[0].message,
+    PUBLISH_INACTIVE_EMPLOYMENT_CODE
+  );
 }
 
 export { DailyBoardPublishedPayloadError, ymdFromStoredDate };

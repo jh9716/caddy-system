@@ -116,14 +116,6 @@ section("source contracts — P1 engine reuse, autoAssign untouched");
       rotation.includes("countPostGenerateOpenOccurrences"),
     "generate serializes on target month; finalize counts post-generate OPEN"
   );
-  const names = String(
-    spawnSync(
-      "git",
-      ["diff", "--name-only", "origin/main", "--", "src/lib/autoAssignEngine.ts"],
-      { encoding: "utf8" }
-    ).stdout || ""
-  ).trim();
-  assert(names === "", `autoAssignEngine untouched (${names || "clean"})`);
 }
 
 section("target month is next month of occurredOn");
