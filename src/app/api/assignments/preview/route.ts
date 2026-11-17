@@ -11,7 +11,10 @@ import {
   type SpecialStartAnchor,
 } from "@/lib/autoAssignEngine";
 import type { AvailabilityRow } from "@/lib/availabilityEngine";
+import { employmentRowsFromAvailability } from "@/lib/assignableRoster";
 import { loadAvailabilityForDate } from "@/lib/availabilityService";
+import { loadCaddyEmploymentFromDb } from "@/lib/dailyBoardDraftInvariants";
+import { prisma } from "@/lib/prisma";
 import { parseReservationWorkbook } from "@/lib/reservationImportXlsx";
 import { OffSheetError } from "@/lib/offSheetFetch";
 import { isOffSheetUnresolvedError } from "@/lib/caddyPoolCanonicalService";
@@ -96,6 +99,29 @@ function parseSpecialAnchor(raw: unknown): SpecialStartAnchor | null {
   const teeTime = String((raw as { teeTime?: unknown }).teeTime || "").trim();
   if (!course || !teeTime) return null;
   return { course, teeTime };
+}
+
+function uniqueCaddyIds(
+  ...lists: Array<Array<{ id?: number }> | null | undefined>
+): number[] {
+  const ids = new Set<number>();
+  for (const list of lists) {
+    for (const row of list || []) {
+      const id = Number(row?.id);
+      if (Number.isInteger(id) && id > 0) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+async function resolveEmploymentAuthority(input: {
+  fromAvailability?: ReturnType<typeof employmentRowsFromAvailability> | null;
+  ids: number[];
+}): Promise<ReturnType<typeof employmentRowsFromAvailability>> {
+  if (input.fromAvailability && input.fromAvailability.length > 0) {
+    return input.fromAvailability;
+  }
+  return (await loadCaddyEmploymentFromDb(prisma, input.ids)) || [];
 }
 
 function availabilityRowsToCaddies(
@@ -271,6 +297,7 @@ export async function POST(req: NextRequest) {
         caddyDirectory,
         specialSupportByShift: supportQueues.byShift,
         oneTwoSupport: supportQueues.oneTwoSupport,
+        employmentAuthority: employmentRowsFromAvailability(availability),
       });
 
       return NextResponse.json({
@@ -341,6 +368,9 @@ export async function POST(req: NextRequest) {
     )
       ? (body.caddyDirectory as AutoAssignCaddy[])
       : undefined;
+    let availabilityEmployment: ReturnType<
+      typeof employmentRowsFromAvailability
+    > | null = null;
 
     // available 생략 시 DB에서 로드 (읽기 전용)
     if (!Array.isArray(body.available)) {
@@ -356,6 +386,7 @@ export async function POST(req: NextRequest) {
         ...availability.special,
         ...availability.excluded,
       ]);
+      availabilityEmployment = employmentRowsFromAvailability(availability);
       const unavailable = unavailableReasonsFromRows(availability.excluded);
       const { bundles, anchors, placement } = await loadEngineSpecialBundlesForDate(
         date,
@@ -452,6 +483,20 @@ export async function POST(req: NextRequest) {
     }
 
     const supportQueues = await loadSupportEngineQueuesForDate(date);
+    const employmentAuthority = await resolveEmploymentAuthority({
+      fromAvailability: availabilityEmployment,
+      ids: uniqueCaddyIds(
+        available,
+        special,
+        jsonCaddyDirectory,
+        fiftyFourHole,
+        oneThreeCandidates,
+        oneTwoCandidates,
+        oneMakCandidates,
+        twoThreeCandidates,
+        twoCandidates
+      ),
+    });
     const result = computeAutoAssignmentsV1({
       date,
       reservations,
@@ -478,6 +523,7 @@ export async function POST(req: NextRequest) {
       caddyDirectory: jsonCaddyDirectory,
       specialSupportByShift: supportQueues.byShift,
       oneTwoSupport: supportQueues.oneTwoSupport,
+      employmentAuthority,
     });
 
     return NextResponse.json({

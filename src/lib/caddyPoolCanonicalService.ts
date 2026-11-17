@@ -365,10 +365,12 @@ export async function loadCanonicalReflowState(
   );
   const clientWithEmployment = overlayLatestEmploymentStatus(
     clientPool,
+    null,
     caddies
   );
   const computeClientWithEmployment = overlayLatestEmploymentStatus(
     opts?.computeClientPool ?? clientPool,
+    null,
     caddies
   );
   const rosterBaseline = recoverRosterBaseline({

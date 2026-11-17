@@ -5,6 +5,10 @@
  * current-ops panels. This module is the assignable gate used by
  * auto-assign, reflow, unused/manual pickers, spare, and special-duty
  * candidate lists. RETIRED/DELETED stay out of both.
+ *
+ * Employment merge: mixed untrusted sources prefer inactive (LEAVE/
+ * RETIRED) over stale ACTIVE. Optional authority (latest DB Caddy rows)
+ * last-wins so a real return to ACTIVE can be assigned again.
  */
 
 import {
@@ -13,12 +17,28 @@ import {
 } from "@/lib/availabilityEngine";
 
 export const INACTIVE_EMPLOYMENT_WARNING_CODE = "INACTIVE_EMPLOYMENT";
+export const PUBLISH_INACTIVE_EMPLOYMENT_CODE = "INACTIVE_EMPLOYMENT";
 
 export type AssignableEmploymentRow = {
   id?: number;
   caddyId?: number;
+  name?: string | null;
   employmentStatus?: unknown;
   excludedReasons?: readonly string[] | null;
+};
+
+export type EmploymentMergePolicy = "prefer-inactive" | "authority";
+
+export type PlacedCaddyRef = {
+  id: number;
+  name: string;
+};
+
+export type InactiveEmploymentIssue = {
+  caddyId: number;
+  name: string;
+  status: string;
+  message: string;
 };
 
 export function isAssignableEmploymentStatus(value: unknown): boolean {
@@ -71,20 +91,52 @@ export function inactiveEmploymentWarningMessage(
   return `${who}은(는) ${label} 상태입니다. 신규 자동배치·수동배치·스페어·특수근무 후보에서 제외됩니다. 기존 배치는 유지되니 관리자가 확인하세요.`;
 }
 
+export function blockedByInactiveEmploymentMessage(
+  issues: readonly InactiveEmploymentIssue[]
+): string {
+  const who = issues
+    .map((issue) => {
+      const label = inactiveEmploymentLabel(issue.status) || "재직상태 아님";
+      return `${issue.name}(${label})`;
+    })
+    .join(", ");
+  return `휴직/퇴사 캐디가 배치되어 있어 공개할 수 없습니다: ${who}`;
+}
+
+function positiveCaddyId(row: AssignableEmploymentRow): number | null {
+  const id = Number(row.id ?? row.caddyId);
+  if (!Number.isInteger(id) || id < 1) return null;
+  return id;
+}
+
+function mergeEmploymentStatus(
+  current: string | undefined,
+  incoming: string,
+  policy: EmploymentMergePolicy
+): string {
+  if (current === undefined || policy === "authority") return incoming;
+  const currentInactive = !isAssignableEmploymentStatus(current);
+  const incomingInactive = !isAssignableEmploymentStatus(incoming);
+  if (incomingInactive) return incoming;
+  if (currentInactive) return current;
+  return incoming;
+}
+
 export function employmentStatusById(
-  rows:
-    | readonly AssignableEmploymentRow[]
-    | null
-    | undefined
+  rows: readonly AssignableEmploymentRow[] | null | undefined,
+  policy: EmploymentMergePolicy = "prefer-inactive"
 ): Map<number, string> {
   const byId = new Map<number, string>();
   for (const row of rows || []) {
-    const id = Number(row.id ?? row.caddyId);
-    if (!Number.isInteger(id) || id < 1) continue;
+    const id = positiveCaddyId(row);
+    if (id == null) continue;
     if (row.employmentStatus == null) continue;
     const value = String(row.employmentStatus).trim();
     if (!value) continue;
-    byId.set(id, String(row.employmentStatus));
+    byId.set(
+      id,
+      mergeEmploymentStatus(byId.get(id), String(row.employmentStatus), policy)
+    );
   }
   return byId;
 }
@@ -93,11 +145,16 @@ export function overlayLatestEmploymentStatus<
   T extends { id: number; employmentStatus?: string | null },
 >(
   rows: readonly T[] | null | undefined,
-  source: readonly AssignableEmploymentRow[] | null | undefined
+  source: readonly AssignableEmploymentRow[] | null | undefined,
+  authority?: readonly AssignableEmploymentRow[] | null
 ): T[] {
-  const latest = employmentStatusById(source);
+  const latest = employmentStatusById(source, "prefer-inactive");
+  const authoritative = employmentStatusById(authority, "authority");
   return (rows || []).map((row) => {
-    const emp = latest.get(row.id);
+    const emp =
+      authoritative.get(row.id) !== undefined
+        ? authoritative.get(row.id)
+        : latest.get(row.id);
     if (emp === undefined) return { ...row };
     return { ...row, employmentStatus: emp };
   });
@@ -115,4 +172,71 @@ export function employmentRowsFromAvailability(
     ...(availability.special || []),
     ...(availability.excluded || []),
   ];
+}
+
+export function collectPlacedCaddyRefs(input: {
+  assignments?:
+    | readonly {
+        caddy?: { id?: number; name?: string | null } | null;
+      }[]
+    | null;
+  sparesByShift?:
+    | readonly {
+        spare1?: { caddyId?: number; name?: string | null } | null;
+        spare2?: { caddyId?: number; name?: string | null } | null;
+      }[]
+    | null;
+}): PlacedCaddyRef[] {
+  const refs: PlacedCaddyRef[] = [];
+  const seen = new Set<number>();
+  const push = (idRaw: unknown, nameRaw: unknown) => {
+    const id = Number(idRaw);
+    if (!Number.isInteger(id) || id < 1 || seen.has(id)) return;
+    seen.add(id);
+    refs.push({
+      id,
+      name: String(nameRaw || "").trim() || `CADDY#${id}`,
+    });
+  };
+  for (const row of input.assignments || []) {
+    push(row.caddy?.id, row.caddy?.name);
+  }
+  for (const spare of input.sparesByShift || []) {
+    push(spare.spare1?.caddyId, spare.spare1?.name);
+    push(spare.spare2?.caddyId, spare.spare2?.name);
+  }
+  return refs;
+}
+
+export function inactiveEmploymentIssuesFromDb(
+  placed: readonly PlacedCaddyRef[],
+  dbRows:
+    | readonly AssignableEmploymentRow[]
+    | null
+    | undefined
+): InactiveEmploymentIssue[] {
+  const byId = employmentStatusById(dbRows, "authority");
+  const nameById = new Map<number, string>();
+  for (const row of dbRows || []) {
+    const id = positiveCaddyId(row);
+    if (id == null) continue;
+    const name = String(row.name || "").trim();
+    if (name) nameById.set(id, name);
+  }
+  const found: Array<{ caddyId: number; name: string; status: string }> = [];
+  for (const person of placed) {
+    const status = byId.get(person.id);
+    if (status === undefined) continue;
+    if (isAssignableEmploymentStatus(status)) continue;
+    found.push({
+      caddyId: person.id,
+      name: nameById.get(person.id) || person.name,
+      status,
+    });
+  }
+  if (found.length === 0) return [];
+  const summary = blockedByInactiveEmploymentMessage(
+    found.map((row) => ({ ...row, message: "" }))
+  );
+  return found.map((row) => ({ ...row, message: summary }));
 }

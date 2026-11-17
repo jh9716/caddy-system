@@ -116,8 +116,18 @@ export type CaddyIdLookupDb = {
   caddy: {
     findMany: (args: {
       where: { id: { in: number[] } };
-      select: { id: true };
-    }) => Promise<Array<{ id: number }>>;
+      select: {
+        id: true;
+        name?: true;
+        employmentStatus?: true;
+      };
+    }) => Promise<
+      Array<{
+        id: number;
+        name?: string | null;
+        employmentStatus?: string | null;
+      }>
+    >;
   };
 };
 
@@ -160,6 +170,30 @@ export async function loadTrustedCaddyIdsFromDb(
       .map((row) => Number(row.id))
       .filter((id) => Number.isInteger(id) && id > 0)
   );
+}
+
+/** Latest Caddy.employmentStatus for placed ids. null = lookup unavailable (tests). */
+export async function loadCaddyEmploymentFromDb(
+  db: unknown,
+  ids: readonly number[]
+): Promise<Array<{
+  id: number;
+  name?: string | null;
+  employmentStatus?: string | null;
+}> | null> {
+  const lookup = asCaddyIdLookup(db);
+  if (!lookup) return null;
+  const unique = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
+  if (unique.length === 0) return [];
+  const rows = await lookup.caddy.findMany({
+    where: { id: { in: unique } },
+    select: { id: true, name: true, employmentStatus: true },
+  });
+  return rows.map((row) => ({
+    id: Number(row.id),
+    name: row.name ?? null,
+    employmentStatus: row.employmentStatus ?? null,
+  }));
 }
 
 export function assertDailyBoardDraftInvariants(

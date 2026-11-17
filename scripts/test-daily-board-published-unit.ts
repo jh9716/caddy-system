@@ -5,7 +5,11 @@
 import fs from "fs";
 import path from "path";
 import { NextRequest } from "next/server";
-import { assignmentDraftToPayload } from "../src/lib/dailyBoardDraft";
+import {
+  assignmentDraftToPayload,
+  DailyBoardDraftPayloadError,
+} from "../src/lib/dailyBoardDraft";
+import { PUBLISH_INACTIVE_EMPLOYMENT_CODE } from "../src/lib/assignableRoster";
 import {
   saveDailyBoardDraft,
   type DailyBoardDraftDb,
@@ -217,14 +221,20 @@ type PublishedRow = {
   updatedAt: Date;
 };
 
-function createMemoryDb() {
+function createMemoryDb(opts?: {
+  employmentById?: Map<
+    number,
+    { name?: string; employmentStatus: string }
+  >;
+}) {
   const drafts = new Map<number, DraftRow>();
   const published = new Map<number, PublishedRow>();
   let shiftDutyWrites = 0;
   let scheduleWrites = 0;
   const keyOf = (d: Date) => d.getTime();
+  const employmentById = opts?.employmentById;
 
-  const api = {
+  const api: Record<string, unknown> = {
     dailyBoardDraft: {
       findUnique: async ({ where }: { where: { date: Date } }) => {
         const row = drafts.get(keyOf(where.date));
@@ -333,6 +343,29 @@ function createMemoryDb() {
     $transaction: async <T>(fn: (tx: PublishDailyBoardDb) => Promise<T>) =>
       fn(api as unknown as PublishDailyBoardDb),
   };
+
+  if (employmentById) {
+    api.caddy = {
+      findMany: async ({
+        where,
+      }: {
+        where: { id: { in: number[] } };
+      }) => {
+        const ids = Array.isArray(where?.id?.in) ? where.id.in : [];
+        return ids
+          .map((id) => Number(id))
+          .filter((id) => employmentById.has(id))
+          .map((id) => {
+            const row = employmentById.get(id)!;
+            return {
+              id,
+              name: row.name || `C${id}`,
+              employmentStatus: row.employmentStatus,
+            };
+          });
+      },
+    };
+  }
 
   return {
     db: api as unknown as PublishDailyBoardDb & DailyBoardDraftDb & DailyBoardPublishedDb,
@@ -1486,6 +1519,94 @@ async function main() {
     assert(busy.label === PUBLISH_BUSY_LABEL, "busy label");
     assert(busy.disabled === true, "busy disabled");
     assert(PUBLISH_HINT.includes("캐디 공용 배치표"), "hint copy");
+  }
+
+  section("publish blocks LEAVE/RETIRED and keeps existing Published");
+  {
+    const date = "2026-11-14";
+    const draft = makeDraft(date);
+    const leaveId = draft.assignments[0].caddy.id;
+    const retiredId = draft.assignments[1]?.caddy.id || leaveId;
+    const employmentById = new Map(
+      draft.assignments.map((row) => [
+        row.caddy.id,
+        {
+          name: row.caddy.name,
+          employmentStatus: "ACTIVE",
+        },
+      ])
+    );
+    const mem = createMemoryDb({ employmentById });
+    const saved = await saveDailyBoardDraft({
+      date,
+      expectedVersion: 0,
+      payload: assignmentDraftToPayload(draft),
+      updatedByUserId: 7,
+      db: mem.db,
+    });
+    const published = await publishDailyBoard({
+      date,
+      expectedDraftVersion: saved.version,
+      publishedByUserId: 7,
+      db: mem.db,
+    });
+    assert(
+      published.payload.placements.length === saved.payload.assignments.length,
+      "ACTIVE publish ok"
+    );
+
+    employmentById.set(leaveId, {
+      name: draft.assignments[0].caddy.name,
+      employmentStatus: "LEAVE",
+    });
+    const kept = await getDailyBoardPublished(date, mem.db);
+    assert(
+      kept?.payload.placements.length === published.payload.placements.length,
+      "GET published still returns prior snapshot"
+    );
+    let leaveErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await publishDailyBoard({
+        date,
+        expectedDraftVersion: saved.version,
+        publishedByUserId: 7,
+        db: mem.db,
+      });
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) leaveErr = e;
+    }
+    assert(leaveErr?.code === PUBLISH_INACTIVE_EMPLOYMENT_CODE, "LEAVE publish blocked");
+    assert(/휴직/.test(leaveErr?.message || ""), "LEAVE publish names 휴직");
+    assert(
+      (await getDailyBoardPublished(date, mem.db))?.payload.placements.length ===
+        published.payload.placements.length,
+      "blocked republish does not rewrite Published"
+    );
+
+    employmentById.set(leaveId, {
+      name: draft.assignments[0].caddy.name,
+      employmentStatus: "ACTIVE",
+    });
+    employmentById.set(retiredId, {
+      name: draft.assignments.find((row) => row.caddy.id === retiredId)?.caddy.name || "퇴사",
+      employmentStatus: "RETIRED",
+    });
+    let retiredErr: DailyBoardDraftPayloadError | null = null;
+    try {
+      await publishDailyBoard({
+        date,
+        expectedDraftVersion: saved.version,
+        publishedByUserId: 7,
+        db: mem.db,
+      });
+    } catch (e) {
+      if (e instanceof DailyBoardDraftPayloadError) retiredErr = e;
+    }
+    assert(
+      retiredErr?.code === PUBLISH_INACTIVE_EMPLOYMENT_CODE,
+      "RETIRED publish blocked"
+    );
+    assert(/퇴사/.test(retiredErr?.message || ""), "RETIRED publish names 퇴사");
   }
 
   section("today/yesterday helpers");

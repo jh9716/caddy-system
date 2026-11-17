@@ -1696,6 +1696,7 @@ export default function ManageAssignmentsOpsPage() {
     const employmentSource = employmentRowsFromAvailability(availability);
     const existing = overlayLatestEmploymentStatus(
       draft?.caddyPool,
+      null,
       employmentSource
     );
     const raw = availability

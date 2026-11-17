@@ -268,10 +268,10 @@ export function applyLatestEmploymentToDraft(
   if (!rows.length) return draft;
   return {
     ...draft,
-    caddyPool: overlayLatestEmploymentStatus(draft.caddyPool, rows),
+    caddyPool: overlayLatestEmploymentStatus(draft.caddyPool, null, rows),
     assignments: draft.assignments.map((row) => ({
       ...cloneRow(row),
-      caddy: overlayLatestEmploymentStatus([row.caddy], rows)[0] || row.caddy,
+      caddy: overlayLatestEmploymentStatus([row.caddy], null, rows)[0] || row.caddy,
     })),
   };
 }

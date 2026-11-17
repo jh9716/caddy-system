@@ -3456,6 +3456,14 @@ export function computeAutoAssignmentsV1(input: {
    * 1·2부 지원. 단일부 byShift와 분리. 1부 지원창 + 2부 원번 뒤 지원 구간에 linked 배치.
    */
   oneTwoSupport?: AutoAssignCaddy[];
+  /**
+   * 최신 DB Caddy.employmentStatus. mixed source의 stale ACTIVE보다 우선한다.
+   */
+  employmentAuthority?: Array<{
+    id?: number;
+    caddyId?: number;
+    employmentStatus?: string | null;
+  }> | null;
 }): AutoAssignResultV1 {
   const date = input.date;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -3511,6 +3519,7 @@ export function computeAutoAssignmentsV1(input: {
     ...(input.specialSupportByShift?.["3부"] || []),
     ...(input.oneTwoSupport || []),
   ];
+  const employmentAuthority = input.employmentAuthority || [];
   const caddyDirectory = overlayLatestEmploymentStatus(
     dedupeCaddies([
       ...(input.caddyDirectory || []),
@@ -3522,11 +3531,13 @@ export function computeAutoAssignmentsV1(input: {
       ...(input.twoThreeCandidates || []),
       ...(input.oneMakCandidates || []),
     ]),
-    employmentSource
+    employmentSource,
+    employmentAuthority
   );
   const assignableDirectory = assignableCaddiesFrom(
     caddyDirectory,
-    employmentSource
+    employmentSource,
+    employmentAuthority
   );
 
   // 0) 고정배치 / 특별찾근 (최우선)
@@ -3556,7 +3567,8 @@ export function computeAutoAssignmentsV1(input: {
         .map((row) => caddyById.get(row.caddyId))
         .filter((caddy): caddy is AutoAssignCaddy => !!caddy)
         .filter((caddy) => !fixed.assignedCaddyIds.has(caddy.id)),
-      employmentSource
+      employmentSource,
+      employmentAuthority
     );
   const chageunForThird = chageunFromFixed(deferredThirdChageun);
   const chageunForSecond = chageunFromFixed(deferredSecondChageun);
@@ -3568,7 +3580,8 @@ export function computeAutoAssignmentsV1(input: {
 
   const fiftyFourHole = assignableCaddiesFrom(
     input.fiftyFourHole,
-    employmentSource
+    employmentSource,
+    employmentAuthority
   )
     .filter((c) => !fixedIds.has(c.id))
     .sort(compareSpecialCandidateOrder);
@@ -3576,7 +3589,8 @@ export function computeAutoAssignmentsV1(input: {
 
   const oneThreeCandidates = assignableCaddiesFrom(
     input.oneThreeCandidates,
-    employmentSource
+    employmentSource,
+    employmentAuthority
   )
     .filter((c) => !fixedIds.has(c.id) && !fiftyFourIds.has(c.id))
     .sort(compareSpecialCandidateOrder);
@@ -3584,7 +3598,8 @@ export function computeAutoAssignmentsV1(input: {
 
   const oneTwoCandidates = assignableCaddiesFrom(
     input.oneTwoCandidates,
-    employmentSource
+    employmentSource,
+    employmentAuthority
   )
     .filter(
       (c) =>
@@ -3595,7 +3610,8 @@ export function computeAutoAssignmentsV1(input: {
 
   const oneMakCandidates = assignableCaddiesFrom(
     input.oneMakCandidates,
-    employmentSource
+    employmentSource,
+    employmentAuthority
   )
     .filter(
       (c) =>
@@ -3609,7 +3625,8 @@ export function computeAutoAssignmentsV1(input: {
 
   const twoThreeCandidates = assignableCaddiesFrom(
     input.twoThreeCandidates,
-    employmentSource
+    employmentSource,
+    employmentAuthority
   )
     .filter(
       (c) =>
@@ -3624,7 +3641,8 @@ export function computeAutoAssignmentsV1(input: {
 
   const twoCandidates = assignableCaddiesFrom(
     input.twoCandidates,
-    employmentSource
+    employmentSource,
+    employmentAuthority
   )
     .filter(
       (c) =>
@@ -3647,7 +3665,11 @@ export function computeAutoAssignmentsV1(input: {
     ...twoThreeIds,
     ...twoIds,
   ]);
-  const special = assignableCaddiesFrom(input.special, employmentSource)
+  const special = assignableCaddiesFrom(
+    input.special,
+    employmentSource,
+    employmentAuthority
+  )
     .filter((c) => !specialExclude.has(c.id))
     .sort(compareCaddyOrder);
 
@@ -3655,27 +3677,35 @@ export function computeAutoAssignmentsV1(input: {
     ? {
         "1부": assignableCaddiesFrom(
           input.specialSupportByShift["1부"],
-          employmentSource
+          employmentSource,
+          employmentAuthority
         ),
         "2부": assignableCaddiesFrom(
           input.specialSupportByShift["2부"],
-          employmentSource
+          employmentSource,
+          employmentAuthority
         ),
         "3부": assignableCaddiesFrom(
           input.specialSupportByShift["3부"],
-          employmentSource
+          employmentSource,
+          employmentAuthority
         ),
       }
     : emptySpecialSupportByShift();
   const oneTwoSupport = assignableCaddiesFrom(
     input.oneTwoSupport,
-    employmentSource
+    employmentSource,
+    employmentAuthority
   );
   const specialSupportIds = specialSupportCaddyIds(
     incomingSupportByShift,
     oneTwoSupport
   );
-  const availableAll = assignableCaddiesFrom(input.available, employmentSource)
+  const availableAll = assignableCaddiesFrom(
+    input.available,
+    employmentSource,
+    employmentAuthority
+  )
     .filter((caddy) => !specialSupportIds.has(caddy.id))
     .sort(compareCaddyOrder);
   const originalHouse = splitCaddyPools(availableAll).house;
@@ -4048,10 +4078,19 @@ export function isActiveEmploymentStatus(value: unknown): boolean {
 
 function assignableCaddiesFrom(
   caddies: readonly AutoAssignCaddy[] | null | undefined,
-  employmentSource: readonly AutoAssignCaddy[]
+  employmentSource: readonly AutoAssignCaddy[],
+  employmentAuthority?: readonly {
+    id?: number;
+    caddyId?: number;
+    employmentStatus?: string | null;
+  }[] | null
 ): AutoAssignCaddy[] {
   return eligibleRegularReflowCaddies(
-    overlayLatestEmploymentStatus([...(caddies || [])], employmentSource)
+    overlayLatestEmploymentStatus(
+      [...(caddies || [])],
+      employmentSource,
+      employmentAuthority
+    )
   );
 }
 

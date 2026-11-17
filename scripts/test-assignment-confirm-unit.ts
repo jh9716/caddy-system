@@ -17,6 +17,7 @@ import {
   validateConfirmRequest,
 } from "../src/lib/assignmentConfirm";
 import { applyConfirmedAssignments } from "../src/lib/assignmentConfirmApply";
+import { INACTIVE_EMPLOYMENT_WARNING_CODE } from "../src/lib/assignableRoster";
 import type { AutoAssignmentRow } from "../src/lib/autoAssignEngine";
 import { POST as confirmPOST } from "../src/app/api/assignments/confirm/route";
 import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
@@ -431,6 +432,53 @@ async function main() {
     createHash("sha256").update("x").digest("hex").length === 64,
     "crypto available"
   );
+
+  section("legacy confirm blocks LEAVE/RETIRED from latest DB");
+  {
+    const leavePrisma = {
+      caddy: {
+        findMany: async () => [
+          { id: 1, name: "휴직자", employmentStatus: "LEAVE" },
+        ],
+      },
+    };
+    const leave = await applyConfirmedAssignments(
+      {
+        status: "CONFIRMED",
+        date: "2026-08-20",
+        assignments: [sampleRow({ caddyId: 1 })],
+      },
+      { prisma: leavePrisma as never }
+    );
+    assert(leave.ok === false, "LEAVE confirm rejected");
+    assert(
+      leave.ok === false && leave.code === INACTIVE_EMPLOYMENT_WARNING_CODE,
+      "LEAVE confirm code"
+    );
+    assert(
+      leave.ok === false && /휴직자\(휴직\)/.test(leave.message),
+      "LEAVE confirm names the caddy"
+    );
+    const retiredPrisma = {
+      caddy: {
+        findMany: async () => [
+          { id: 1, name: "퇴사자", employmentStatus: "RETIRED" },
+        ],
+      },
+    };
+    const retired = await applyConfirmedAssignments(
+      {
+        status: "CONFIRMED",
+        date: "2026-08-20",
+        assignments: [sampleRow({ caddyId: 1 })],
+      },
+      { prisma: retiredPrisma as never }
+    );
+    assert(
+      retired.ok === false && retired.code === INACTIVE_EMPLOYMENT_WARNING_CODE,
+      "RETIRED confirm rejected"
+    );
+  }
 
   await runDbTests();
 

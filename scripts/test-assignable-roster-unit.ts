@@ -19,8 +19,12 @@ import {
 } from "../src/lib/assignmentBoardCellEdit";
 import {
   INACTIVE_EMPLOYMENT_WARNING_CODE,
+  blockedByInactiveEmploymentMessage,
+  collectPlacedCaddyRefs,
   employmentRowsFromAvailability,
+  employmentStatusById,
   filterAssignableCaddies,
+  inactiveEmploymentIssuesFromDb,
   isAssignableCaddy,
   isAssignableEmploymentStatus,
   overlayLatestEmploymentStatus,
@@ -428,6 +432,128 @@ section("스페어·특수근무·지원근무 후보에서 LEAVE 제외");
   );
 }
 
+section("재직 상태 병합: stale ACTIVE는 LEAVE를 덮지 못하고, DB 권위 ACTIVE는 복귀");
+{
+  const mixed = employmentStatusById([
+    { id: 1, employmentStatus: "LEAVE" },
+    { id: 1, employmentStatus: "ACTIVE" },
+  ]);
+  assert(mixed.get(1) === "LEAVE", "prefer-inactive keeps LEAVE over later ACTIVE");
+  const mixedRev = employmentStatusById([
+    { id: 2, employmentStatus: "ACTIVE" },
+    { id: 2, employmentStatus: "LEAVE" },
+  ]);
+  assert(mixedRev.get(2) === "LEAVE", "prefer-inactive later LEAVE still wins");
+  const staleActive = house(81, { name: "휴직자", employmentStatus: "ACTIVE" });
+  const active = house(82, { name: "재직" });
+  const leaveWins = overlayLatestEmploymentStatus(
+    [staleActive, active],
+    [
+      { id: 81, employmentStatus: "ACTIVE" },
+      { id: 81, employmentStatus: "LEAVE" },
+    ]
+  );
+  assert(
+    leaveWins.find((c) => c.id === 81)?.employmentStatus === "LEAVE",
+    "overlay mixed source drops stale ACTIVE"
+  );
+  const authLeave = overlayLatestEmploymentStatus(
+    [staleActive, active],
+    [staleActive, active],
+    [{ id: 81, employmentStatus: "LEAVE" }, active]
+  );
+  assert(
+    authLeave.find((c) => c.id === 81)?.employmentStatus === "LEAVE",
+    "DB authority LEAVE overrides stale ACTIVE source"
+  );
+  const authReturn = overlayLatestEmploymentStatus(
+    [house(81, { employmentStatus: "LEAVE" }), active],
+    [house(81, { employmentStatus: "LEAVE" })],
+    [{ id: 81, employmentStatus: "ACTIVE" }, active]
+  );
+  assert(
+    authReturn.find((c) => c.id === 81)?.employmentStatus === "ACTIVE",
+    "DB authority ACTIVE restores returned caddy"
+  );
+  const engineLeave = computeAutoAssignmentsV1({
+    date: "2026-11-14",
+    available: [staleActive, active, house(83), house(84)],
+    employmentAuthority: [
+      { id: 81, employmentStatus: "LEAVE" },
+      { id: 82, employmentStatus: "ACTIVE" },
+      { id: 83, employmentStatus: "ACTIVE" },
+      { id: 84, employmentStatus: "ACTIVE" },
+    ],
+    reservations: [res("2026-11-14", "A1"), res("2026-11-14", "A2")],
+  });
+  assert(
+    !assignedIds(engineLeave).includes(81),
+    "engine authority LEAVE is not assigned despite stale ACTIVE available"
+  );
+  assert(assignedIds(engineLeave).includes(82), "engine still assigns ACTIVE");
+  const engineReturn = computeAutoAssignmentsV1({
+    date: "2026-11-14",
+    available: [
+      house(91, { name: "복귀", employmentStatus: "LEAVE" }),
+      house(92),
+    ],
+    employmentAuthority: [
+      { id: 91, employmentStatus: "ACTIVE" },
+      { id: 92, employmentStatus: "ACTIVE" },
+    ],
+    reservations: [res("2026-11-14", "A1")],
+  });
+  assert(
+    assignedIds(engineReturn).includes(91),
+    "engine authority ACTIVE can be auto-assigned after leave"
+  );
+}
+
+section("공개 확정은 휴직·퇴사 배치를 차단하고 대상을 안내");
+{
+  const placed = collectPlacedCaddyRefs({
+    assignments: [
+      { caddy: { id: 1, name: "휴직자" } },
+      { caddy: { id: 2, name: "재직자" } },
+    ],
+    sparesByShift: [
+      { spare1: { caddyId: 3, name: "퇴사스페어" }, spare2: null },
+    ],
+  });
+  assert(
+    placed.map((p) => p.id).join(",") === "1,2,3",
+    "collect assignments + spare ids"
+  );
+  const leaveIssues = inactiveEmploymentIssuesFromDb(placed, [
+    { id: 1, name: "휴직자", employmentStatus: "LEAVE" },
+    { id: 2, name: "재직자", employmentStatus: "ACTIVE" },
+    { id: 3, name: "퇴사스페어", employmentStatus: "ACTIVE" },
+  ]);
+  assert(leaveIssues.length === 1 && leaveIssues[0].caddyId === 1, "LEAVE placed blocked");
+  assert(/휴직자\(휴직\)/.test(leaveIssues[0].message), "admin message names 휴직자");
+  const retiredIssues = inactiveEmploymentIssuesFromDb(placed, [
+    { id: 1, name: "휴직자", employmentStatus: "ACTIVE" },
+    { id: 2, name: "재직자", employmentStatus: "ACTIVE" },
+    { id: 3, name: "퇴사스페어", employmentStatus: "RETIRED" },
+  ]);
+  assert(
+    retiredIssues.length === 1 && retiredIssues[0].caddyId === 3,
+    "RETIRED spare blocked"
+  );
+  const ok = inactiveEmploymentIssuesFromDb(placed, [
+    { id: 1, employmentStatus: "ACTIVE" },
+    { id: 2, employmentStatus: "ACTIVE" },
+    { id: 3, employmentStatus: "ACTIVE" },
+  ]);
+  assert(ok.length === 0, "all ACTIVE publish allowed");
+  assert(
+    /공개할 수 없습니다/.test(
+      blockedByInactiveEmploymentMessage(leaveIssues)
+    ),
+    "publish copy mentions 공개 차단"
+  );
+}
+
 section("휴직 → 재직 복귀 후 다시 배치 가능");
 {
   const returned = house(71, { name: "복귀", employmentStatus: "LEAVE" });
@@ -467,6 +593,22 @@ section("페이지·엔진 경로가 배치 가능 필터를 쓰는지");
     join(process.cwd(), "src/app/manage/assignments/SpecialDutyPanel.tsx"),
     "utf8"
   );
+  const previewSrc = readFileSync(
+    join(process.cwd(), "src/app/api/assignments/preview/route.ts"),
+    "utf8"
+  );
+  const publishSrc = readFileSync(
+    join(process.cwd(), "src/lib/dailyBoardPublishedService.ts"),
+    "utf8"
+  );
+  const confirmSrc = readFileSync(
+    join(process.cwd(), "src/lib/assignmentConfirmApply.ts"),
+    "utf8"
+  );
+  const getPublishedSrc = readFileSync(
+    join(process.cwd(), "src/app/api/assignments/published/route.ts"),
+    "utf8"
+  );
   assert(pageSrc.includes("isAssignableEmploymentStatus"), "house/pool uses assignable");
   assert(pageSrc.includes("INACTIVE_EMPLOYMENT_WARNING_CODE"), "page surfaces employment warning");
   assert(pageSrc.includes("applyLatestEmploymentToDraft"), "page overlays latest employment");
@@ -474,6 +616,28 @@ section("페이지·엔진 경로가 배치 가능 필터를 쓰는지");
   assert(draftSrc.includes("isAssignableCaddy"), "unused/manual uses assignable");
   assert(cellSrc.includes("휴직/퇴사 캐디는 배치할 수 없습니다."), "direct edit message includes 휴직");
   assert(specialSrc.includes("isAssignableEmploymentStatus"), "special duty search filters assignable");
+  assert(engineSrc.includes("employmentAuthority"), "engine accepts DB employment authority");
+  assert(previewSrc.includes("employmentAuthority"), "preview passes employment authority");
+  assert(
+    previewSrc.includes("resolveEmploymentAuthority"),
+    "preview loads DB employment when client omits or sends available"
+  );
+  assert(
+    publishSrc.includes("assertAssignableEmploymentForPublish"),
+    "publish checks latest employment"
+  );
+  assert(
+    confirmSrc.includes("inactiveEmploymentIssuesFromDb"),
+    "legacy confirm checks latest employment"
+  );
+  const getFn = getPublishedSrc.slice(
+    getPublishedSrc.indexOf("export async function GET"),
+    getPublishedSrc.indexOf("export async function POST")
+  );
+  assert(
+    !getFn.includes("assertAssignableEmploymentForPublish"),
+    "GET published does not rewrite or re-validate employment"
+  );
 }
 
 console.log(`\nDONE: ${passed} passed, ${failed} failed`);
