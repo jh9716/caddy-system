@@ -1226,7 +1226,7 @@ model FreeBoardPost {
 /// DRIVING 은 Caddy.caddyType 전용. 이 테이블 affiliation 은 HOUSE/THIRD 만.
 model TeamAffiliationVersion {
   id              Int      @id @default(autoincrement())
-  /// 이 날짜(로컬 00:00)부터 유효. 같은 날짜는 1개만.
+  /// 이 날짜(UTC 00:00)부터 유효. 같은 날짜는 1개만.
   effectiveFrom   DateTime @unique
   note            String?
   createdAt       DateTime @default(now())

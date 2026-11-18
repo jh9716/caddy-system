@@ -565,13 +565,18 @@ export function resolveHouseStartCaddyIdForRecalc(input: {
   if (meta) return { caddyId: meta, source: "meta" };
   const draft = input.draft;
   if (!draft) return null;
+  const snapshot = draft.teamAffiliation;
   const firstRegular = assignmentsByShift(draft, "1부").find(
-    (row) => row.kind === "regular" && isHouseStartCandidate(row.caddy)
+    (row) =>
+      row.kind === "regular" &&
+      isHouseStartCandidate(row.caddy, snapshot)
   );
   if (firstRegular?.caddy?.id) {
     return { caddyId: firstRegular.caddy.id, source: "draftRegular" };
   }
-  const poolHouse = (draft.caddyPool || []).find((c) => isHouseStartCandidate(c));
+  const poolHouse = (draft.caddyPool || []).find((c) =>
+    isHouseStartCandidate(c, snapshot)
+  );
   if (poolHouse?.id) return { caddyId: poolHouse.id, source: "pool" };
   return null;
 }

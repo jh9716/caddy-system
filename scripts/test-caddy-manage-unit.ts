@@ -1071,7 +1071,8 @@ console.log("== caddies roster board UI source ==");
       /캐디 명단과 확정 배치표는 변경되지 않습니다/.test(src) &&
       /caddyRowsUnchanged/.test(
         fs.readFileSync(path.resolve("src/app/api/team-affiliations/route.ts"), "utf8")
-      ),
+      ) &&
+      /setTeamAffiliation\(data.currentSnapshot\)/.test(src),
     "조 설정 panel does not rewrite roster or published boards"
   );
   assert(

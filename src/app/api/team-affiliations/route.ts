@@ -63,10 +63,14 @@ export async function PUT(req: NextRequest) {
       body,
       userId: auth?.userId ?? null,
     });
-    const versions = await listTeamAffiliationVersions();
+    const [versions, currentSnapshot] = await Promise.all([
+      listTeamAffiliationVersions(),
+      loadTeamAffiliationSnapshot(todayYmd()),
+    ]);
     return NextResponse.json({
       ok: true,
       snapshot: saved.snapshot,
+      currentSnapshot,
       versionId: saved.versionId,
       versions,
       caddyRowsUnchanged: true,

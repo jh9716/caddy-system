@@ -44,6 +44,7 @@ import {
   TEAM_AFFILIATION_TEAMS,
   defaultTeamAffiliationSnapshot,
   houseTenThirdOffSnapshot,
+  isMissingTeamAffiliationTableError,
   houseTeamsInSnapshot,
   inactiveTeamsInSnapshot,
   isHouseAffiliatedTeam,
@@ -560,6 +561,52 @@ section("입력 검증 + 개별 조 선택에는 미운영 조도 포함");
   assert(teamsWithAffiliation("THIRD", snap).length === 0, "THIRD 조 없음");
 }
 
+section("조회 실패를 테이블 미생성으로 오인하지 않음");
+{
+  function prismaErr(code: string, message: string) {
+    const err = new Error(message) as Error & { code: string };
+    err.code = code;
+    return err;
+  }
+  assert(
+    isMissingTeamAffiliationTableError(
+      prismaErr(
+        "P2021",
+        "The table `public.TeamAffiliationVersion` does not exist in the current database."
+      )
+    ),
+    "P2021 테이블 없음만 폴백"
+  );
+  assert(
+    !isMissingTeamAffiliationTableError(
+      prismaErr(
+        "P2002",
+        "Invalid `prisma.teamAffiliationVersion.create()` Unique constraint failed"
+      )
+    ),
+    "unique 충돌은 기본값 폴백 금지"
+  );
+  assert(
+    !isMissingTeamAffiliationTableError(
+      prismaErr(
+        "P2022",
+        "The column `note` does not exist in the current database. TeamAffiliationVersion"
+      )
+    ),
+    "컬럼 없음은 기본값 폴백 금지"
+  );
+  assert(
+    !isMissingTeamAffiliationTableError(
+      new Error('relation "Caddy" does not exist')
+    ),
+    "다른 테이블 없음은 조 설정 기본값으로 숨기지 않음"
+  );
+  assert(
+    !isMissingTeamAffiliationTableError(new Error("Can't reach database server")),
+    "연결 실패는 기본값 폴백 금지"
+  );
+}
+
 section("소스: 엔진/API가 조 번호 하드코딩으로 9조를 THIRD 고정하지 않음");
 {
   const engine = fs.readFileSync(
@@ -846,6 +893,64 @@ section("소스: reflow 전 경로가 live 조 설정을 넘김");
     /setTeamAffiliation\(defaultTeamAffiliationSnapshot\(date\)\)/.test(page) &&
       /TEAM_AFFILIATION_CHANGED_MESSAGE/.test(page),
     "날짜 변경 시 이전 조 설정을 비우고 충돌을 안내"
+  );
+  const canonical = fs.readFileSync(
+    path.resolve("src/lib/caddyPoolCanonicalService.ts"),
+    "utf8"
+  );
+  const staffing = fs.readFileSync(
+    path.resolve("src/lib/dailyStaffingSummary.ts"),
+    "utf8"
+  );
+  const draftSrc = fs.readFileSync(
+    path.resolve("src/lib/assignmentDraft.ts"),
+    "utf8"
+  );
+  const caddiesPage = fs.readFileSync(
+    path.resolve("src/app/manage/caddies/page.tsx"),
+    "utf8"
+  );
+  const engine = fs.readFileSync(
+    path.resolve("src/lib/autoAssignEngine.ts"),
+    "utf8"
+  );
+  const apiSrc = fs.readFileSync(
+    path.resolve("src/app/api/team-affiliations/route.ts"),
+    "utf8"
+  );
+  assert(
+    /loadTeamAffiliationSnapshot\(ymd\)/.test(canonical) &&
+      /teamAffiliation,/.test(canonical),
+    "canonical availability가 날짜별 조 설정을 넘김"
+  );
+  assert(
+    /teamAffiliation: input.teamAffiliation/.test(staffing) &&
+      /teamAffiliation,/.test(page),
+    "staffing dry-run이 조 설정을 엔진에 전달"
+  );
+  assert(
+    /isHouseStartCandidate\(row\.caddy, snapshot\)/.test(draftSrc) &&
+      /isHouseStartCandidate\(c, snapshot\)/.test(draftSrc),
+    "recalc fallback이 Draft 조 설정을 사용"
+  );
+  assert(
+    /isHouseRegularCaddy\(picked\.caddy, snapshot\)/.test(engine),
+    "3부 leftover HOUSE 소비가 stale caddyType을 쓰지 않음"
+  );
+  const saveTeamSettings =
+    caddiesPage.split("async function saveTeamSettings()")[1]?.split(
+      "async function createCaddy()"
+    )[0] || "";
+  assert(
+    /currentSnapshot/.test(apiSrc) &&
+      /setTeamAffiliation\(data.currentSnapshot\)/.test(saveTeamSettings) &&
+      !/setTeamAffiliation\(data.snapshot\)/.test(saveTeamSettings),
+    "미래 조 설정을 오늘 명단에 덮지 않음"
+  );
+  assert(
+    /isMissingTeamAffiliationTableError/.test(service) &&
+      !/\/does not exist\/i/.test(service),
+    "조 설정 폴백이 광역 does not exist 를 쓰지 않음"
   );
 }
 

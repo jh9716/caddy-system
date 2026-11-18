@@ -17,6 +17,7 @@ import {
   type UnassignedReservationRow,
 } from "@/lib/autoAssignEngine";
 import { SHIFT_PARTS, type ShiftPart } from "@/lib/reservationParser";
+import type { TeamAffiliationSnapshot } from "@/lib/teamAffiliation";
 
 export type StaffingShiftCounts = Record<ShiftPart, number>;
 
@@ -66,6 +67,7 @@ export type StaffingDryRunInput = {
   openCourses?: readonly string[] | null;
   specialSupportByShift?: AutoAssignResultV1["specialSupportByShift"];
   oneTwoSupport?: AutoAssignCaddy[];
+  teamAffiliation?: TeamAffiliationSnapshot | null;
 };
 
 export type BuildDailyStaffingSummaryInput = {
@@ -377,6 +379,7 @@ export function tryStaffingDryRun(
       openCourses: input.openCourses,
       specialSupportByShift: input.specialSupportByShift,
       oneTwoSupport: input.oneTwoSupport,
+      teamAffiliation: input.teamAffiliation,
     });
     return { ok: true, result };
   } catch {

@@ -74,6 +74,29 @@ export class TeamAffiliationError extends Error {
   }
 }
 
+/**
+ * Prisma P2021 (table missing) only.
+ * Unique/column/connection errors must not fall back to the default snapshot.
+ */
+export function isMissingTeamAffiliationTableError(e: unknown): boolean {
+  const code =
+    e && typeof e === "object" && "code" in e
+      ? String((e as { code?: unknown }).code)
+      : "";
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  const mentionsAffiliationTable =
+    /TeamAffiliation(?:Version|Item)/i.test(msg);
+  if (!mentionsAffiliationTable) return false;
+  if (code === "P2022" || /\bcolumn\b/i.test(msg)) return false;
+  if (code === "P2021") return true;
+  return (
+    /does not exist in the current database/i.test(msg) ||
+    /relation ["'`]?(?:public\.)?TeamAffiliation(?:Version|Item)["'`]? does not exist/i.test(
+      msg
+    )
+  );
+}
+
 export function isTeamAffiliationTeam(
   value: unknown
 ): value is TeamAffiliationTeam {

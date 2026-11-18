@@ -1501,8 +1501,10 @@ export default function ManageCaddiesPage() {
         return;
       }
       if (data.snapshot) {
-        setTeamAffiliation(data.snapshot);
         setTeamSettingsDraft(data.snapshot.rows);
+      }
+      if (data.currentSnapshot) {
+        setTeamAffiliation(data.currentSnapshot);
       }
       if (Array.isArray(data.versions)) setTeamAffiliationVersions(data.versions);
       setMessage(

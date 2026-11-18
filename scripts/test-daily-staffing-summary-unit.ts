@@ -30,6 +30,7 @@ import {
   hasCurrentBoardStaffingResult,
   tryStaffingDryRun,
 } from "../src/lib/dailyStaffingSummary";
+import { houseTenThirdOffSnapshot } from "../src/lib/teamAffiliation";
 
 let passed = 0;
 let failed = 0;
@@ -681,6 +682,53 @@ section("E. #148 effective ops duty 유지 / extra subtraction 제거");
     }) === 3,
     "unique available만 세고 duty를 다시 빼지 않음"
   );
+section("조 설정 dry-run: 9조 HOUSE는 스냅샷 없으면 1부 미배치");
+{
+  const date = "2026-11-16";
+  const available: AutoAssignCaddy[] = [
+    {
+      id: 1,
+      name: "일조",
+      team: "1조",
+      teamOrder: 1,
+      caddyType: "HOUSE",
+    },
+    {
+      id: 9,
+      name: "구조",
+      team: "9조",
+      teamOrder: 1,
+      caddyType: "THIRD",
+    },
+  ];
+  const reservations = makeReservations(date, [{ shift: "1부", count: 2 }]);
+  const without = tryStaffingDryRun({
+    date,
+    reservations,
+    available,
+    houseStartCaddyId: 1,
+  });
+  const withSnap = tryStaffingDryRun({
+    date,
+    reservations,
+    available,
+    houseStartCaddyId: 1,
+    teamAffiliation: houseTenThirdOffSnapshot(date),
+  });
+  assert(without.ok && withSnap.ok, "dry-run 양쪽 계산");
+  if (without.ok && withSnap.ok) {
+    assert(
+      without.result.unassignedReservations.length === 1,
+      "스냅샷 없으면 9조는 1부 HOUSE 순번에 안 들어감"
+    );
+    assert(
+      withSnap.result.unassignedReservations.length === 0 &&
+        withSnap.result.assignments.some((row) => row.caddy.id === 9),
+      "스냅샷이 있으면 9조 HOUSE가 1부에 들어감"
+    );
+  }
+}
+
   const lib = read("src/lib/dailyStaffingSummary.ts");
   const page = read("src/app/manage/assignments/page.tsx");
   const prisma = read("prisma/schema.prisma");
@@ -719,6 +767,10 @@ section("E. #148 effective ops duty 유지 / extra subtraction 제거");
   assert(
     staffingBlock.includes("canonicalAvailableCount"),
     "page가 canonicalAvailableCount 사용"
+  );
+  assert(
+    staffingBlock.includes("teamAffiliation"),
+    "page dry-run이 날짜별 조 설정을 전달"
   );
   assert(
     !/opsDutyCaddyIds/.test(staffingBlock),

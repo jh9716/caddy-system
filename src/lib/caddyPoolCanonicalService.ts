@@ -46,6 +46,7 @@ import {
   type UnavailableFromShiftRow,
 } from "@/lib/autoAssignEngine";
 import { overlayLatestEmploymentStatus } from "@/lib/assignableRoster";
+import { loadTeamAffiliationSnapshot } from "@/lib/teamAffiliationService";
 
 export type CanonicalOffSheetMode = "cache" | "fetch" | "cache-or-fetch" | "snapshot";
 
@@ -254,7 +255,7 @@ export async function loadCanonicalReflowState(
   const prisma = asCaddyDb(db);
   const { start, end } = parseYmd(ymd);
 
-  const [caddies, assignments, extraTags, unavailableRows, effectiveOps, specialRows] =
+  const [caddies, assignments, extraTags, unavailableRows, effectiveOps, specialRows, teamAffiliation] =
     await Promise.all([
       prisma.caddy.findMany({
         select: {
@@ -289,6 +290,7 @@ export async function loadCanonicalReflowState(
       }),
       resolveEffectiveOpsDuty(ymd).catch(() => null),
       listDailySpecialDutyRecords(ymd).catch(() => [] as Array<{ caddyId: number }>),
+      loadTeamAffiliationSnapshot(ymd),
     ]);
   const opsDutyIds = effectiveOps?.caddyIds ?? [];
 
@@ -317,6 +319,7 @@ export async function loadCanonicalReflowState(
     })),
     assignments,
     extraTags,
+    teamAffiliation,
   });
 
   let offSheetMatched = false;

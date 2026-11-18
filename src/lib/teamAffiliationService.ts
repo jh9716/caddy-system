@@ -11,6 +11,7 @@ import {
   TeamAffiliationError,
   cloneTeamAffiliationSnapshot,
   defaultTeamAffiliationSnapshot,
+  isMissingTeamAffiliationTableError,
   parseTeamAffiliationVersionInput,
   parseTeamAffiliationYmd,
   snapshotFromRows,
@@ -21,20 +22,6 @@ import {
   type TeamAffiliationSnapshot,
   type TeamAffiliationVersionInput,
 } from "@/lib/teamAffiliation";
-
-function isMissingTableError(e: unknown): boolean {
-  const msg = e instanceof Error ? e.message : String(e ?? "");
-  const code =
-    e && typeof e === "object" && "code" in e
-      ? String((e as { code?: unknown }).code)
-      : "";
-  return (
-    code === "P2021" ||
-    /TeamAffiliationVersion/i.test(msg) ||
-    /TeamAffiliationItem/i.test(msg) ||
-    /does not exist/i.test(msg)
-  );
-}
 
 function ymdFromDate(value: Date | string): string {
   return teamAffiliationYmdFromDate(value);
@@ -84,7 +71,9 @@ export async function loadTeamAffiliationSnapshot(
       versionId: version.id,
     });
   } catch (e) {
-    if (isMissingTableError(e)) return defaultTeamAffiliationSnapshot(date);
+    if (isMissingTeamAffiliationTableError(e)) {
+      return defaultTeamAffiliationSnapshot(date);
+    }
     throw e;
   }
 }
@@ -113,7 +102,7 @@ export async function listTeamAffiliationVersions(): Promise<
       rows: rowsFromItems(version.items),
     }));
   } catch (e) {
-    if (isMissingTableError(e)) return [];
+    if (isMissingTeamAffiliationTableError(e)) return [];
     throw e;
   }
 }
@@ -198,7 +187,7 @@ export async function saveTeamAffiliationVersion(input: {
       ),
     };
   } catch (e) {
-    if (isMissingTableError(e)) {
+    if (isMissingTeamAffiliationTableError(e)) {
       throw new TeamAffiliationError(
         "조 설정 테이블이 아직 없습니다. local migration 적용 후 사용하세요.",
         "team_affiliation_unavailable",

@@ -3933,6 +3933,7 @@ export default function ManageAssignmentsOpsPage() {
             : null,
         thirdStartTeam: thirdWeekly?.startTeam || null,
         specialSupportByShift,
+        teamAffiliation,
       };
     }
     return buildDailyStaffingSummary({
@@ -3954,6 +3955,7 @@ export default function ManageAssignmentsOpsPage() {
     specialSupportByShift,
     staffingAvailableCount,
     date,
+    teamAffiliation,
   ]);
 
   const operationalRoster = useMemo(

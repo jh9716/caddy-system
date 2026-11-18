@@ -3251,7 +3251,7 @@ export function assignRegularSequence(input: {
         if (picked.kind === "twoThree") {
           twoThreeAssigned.add(picked.caddy.id);
         }
-        if (normalizeAssignCaddyType(picked.caddy.caddyType) === "HOUSE") {
+        if (isHouseRegularCaddy(picked.caddy, snapshot)) {
           houseAssigned += 1;
         }
         assignments.push({
