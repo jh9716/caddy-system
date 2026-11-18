@@ -94,6 +94,12 @@ t(/comment_parent_null=/.test(verifySql), "verify 기존 parentId NULL");
 t(/comment_parent_set=/.test(verifySql), "verify parentId set count");
 t(/comment_id_fingerprint=/.test(verifySql), "verify comment id fingerprint (no body)");
 t(/20261109193000_comment_replies_v1/.test(verifySql), "verify replies migration finished");
+t(/user_id_fingerprint=/.test(verifySql), "verify User id fingerprint");
+t(/caddy_id_fingerprint=/.test(verifySql), "verify Caddy id fingerprint");
+t(/TeamAffiliationVersion/.test(verifySql) && /TeamAffiliationItem/.test(verifySql), "verify affiliation 테이블 2개");
+t(/TeamAffiliationItem_versionId_fkey/.test(verifySql), "verify affiliation FK");
+t(/20261117233000_team_affiliation_settings/.test(verifySql), "verify affiliation migration finished");
+t(repoMigs.includes("20261117233000_team_affiliation_settings"), "team_affiliation_settings migration 포함");
 t(!/"body"/.test(verifySql) && !/authorUserId/.test(verifySql), "verify SQL 댓글 본문·작성자 미출력");
 t(/comment_parentid_nullable/.test(stateSrc) && /YES/.test(stateSrc), "state.cjs asserts parentId nullable");
 t(/comment_parentid_fk_delete/.test(stateSrc) && /RESTRICT/.test(stateSrc), "state.cjs asserts FK RESTRICT");
@@ -243,8 +249,112 @@ t(repoMigs.includes("20261109193000_comment_replies_v1"), "comment_replies_v1 mi
     }).action === "hold",
     "실행 직전 목록이 바뀌면 HOLD"
   );
+  const {
+    gateTeamAffiliationPreviewMigrate,
+    isTeamAffiliationPreviewBranch,
+    TEAM_AFFILIATION_MIGRATION,
+  } = require("./maintenance/single-migration-gate.cjs");
+  t(isTeamAffiliationPreviewBranch("preview-db-pr379-team-affiliation-32df"), "team-affiliation 전용 브랜치 매칭");
+  t(!isTeamAffiliationPreviewBranch("preview-db-comment-replies-8d28"), "comment-replies 브랜치는 team-affiliation 아님");
+  t(!isTeamAffiliationPreviewBranch("preview-db-free-board-v1"), "다른 preview-db 브랜치는 team-affiliation 아님");
+  t(!isTeamAffiliationPreviewBranch("cursor/team-affiliation-settings-32df"), "제품 브랜치는 team-affiliation Preview gate 아님");
+  const affTarget = TEAM_AFFILIATION_MIGRATION;
+  const affRepo = ["20261109193000_comment_replies_v1", affTarget];
+  const affBase = {
+    refName: "preview-db-pr379-team-affiliation-32df",
+    previewProjectId: PREVIEW_PROJECT_ID,
+    neonEndpoint: PREVIEW_NEON_ENDPOINT,
+    repo: affRepo,
+    appliedFinished: ["20261109193000_comment_replies_v1"],
+    failedNames: [],
+    statusPending: [affTarget],
+  };
+  t(
+    gateSingleMigration({
+      target: affTarget,
+      repo: affRepo,
+      appliedFinished: ["20261109193000_comment_replies_v1"],
+      failedNames: [],
+      statusPending: [affTarget],
+    }).action === "deploy",
+    "gateSingleMigration: affiliation 하나면 deploy"
+  );
+  t(gateTeamAffiliationPreviewMigrate(affBase).action === "allow", "affiliation 대상 migration 1개 → PASS");
+  t(
+    gateTeamAffiliationPreviewMigrate({
+      ...affBase,
+      statusPending: [affTarget, "20261118000000_other_v1"],
+      repo: [...affRepo, "20261118000000_other_v1"],
+    }).action === "hold",
+    "affiliation 다른 pending 추가 → HOLD"
+  );
+  t(
+    gateTeamAffiliationPreviewMigrate({
+      ...affBase,
+      appliedFinished: affRepo,
+      statusPending: [],
+    }).action === "hold",
+    "affiliation pending 없음 → HOLD"
+  );
+  t(
+    gateTeamAffiliationPreviewMigrate({
+      ...affBase,
+      failedNames: ["20260809101500_broken"],
+    }).action === "hold",
+    "affiliation failed 존재 → HOLD"
+  );
+  t(
+    gateTeamAffiliationPreviewMigrate({
+      ...affBase,
+      appliedFinished: ["20261109193000_comment_replies_v1", "20269999999999_unknown"],
+    }).action === "hold",
+    "affiliation unknown 존재 → HOLD"
+  );
+  t(
+    gateTeamAffiliationPreviewMigrate({
+      ...affBase,
+      refName: "preview-db-comment-replies-8d28",
+    }).action === "skip",
+    "comment-replies 브랜치에서 affiliation 전용 조건 적용 방지"
+  );
+  t(
+    gateCommentRepliesPreviewMigrate({
+      ...repliesBase,
+      refName: "preview-db-pr379-team-affiliation-32df",
+    }).action === "skip",
+    "affiliation 브랜치에서 댓글 전용 조건 적용 방지"
+  );
+  t(
+    gateTeamAffiliationPreviewMigrate({
+      ...affBase,
+      previewProjectId: "morning-tooth-60659454",
+    }).action === "hold",
+    "affiliation 운영 프로젝트 id → HOLD"
+  );
+  t(
+    gateTeamAffiliationPreviewMigrate({
+      ...affBase,
+      neonEndpoint: "ep-crimson-cell-a1i1tpce",
+    }).action === "hold",
+    "affiliation 운영 DB 연결 시 차단"
+  );
+  t(
+    gateTeamAffiliationPreviewMigrate({
+      ...affBase,
+      appliedFinishedAgain: affRepo,
+      statusPendingAgain: [],
+    }).action === "hold",
+    "affiliation 실행 직전 목록이 바뀌면 HOLD"
+  );
 }
 t(/gateCommentRepliesPreviewMigrate/.test(stateSrc), "state.cjs 댓글 migrate-gate 재사용");
+t(/gateTeamAffiliationPreviewMigrate/.test(stateSrc), "state.cjs affiliation migrate-gate 재사용");
+t(/isTeamAffiliationPreviewBranch/.test(stateSrc), "state.cjs affiliation 브랜치 판별");
+t(/user_id_fingerprint/.test(stateSrc) && /caddy_id_fingerprint/.test(stateSrc), "state.cjs User/Caddy fingerprint 보존 검증");
+t(/TeamAffiliationVersion table missing/.test(stateSrc), "state.cjs affiliation Version 테이블 검증");
+t(/TeamAffiliationItem table missing/.test(stateSrc), "state.cjs affiliation Item 테이블 검증");
+t(/team_affiliation_settings migration not finished/.test(stateSrc), "state.cjs affiliation migration 기록 검증");
+t(/TeamAffiliationVersion must be empty after migrate/.test(stateSrc), "state.cjs affiliation 시드 금지");
 t(/PREVIEW_REF_NAME/.test(wfRaw), "workflow 가 브랜치 이름을 migrate-gate 에 전달");
 t((wfRaw.match(/state\.cjs migrate-gate/g) || []).length >= 2, "migrate 직전 migrate-gate 재조회");
 const R = ["20260101000000_a", "20260102000000_b", "20260103000000_c"];

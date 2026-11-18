@@ -9,8 +9,11 @@ const { validatePreviewDbUrl } = require("./validate-url.cjs");
 const { listRepoMigrations, classifyMigrationState } = require("./migration-state.cjs");
 const {
   gateCommentRepliesPreviewMigrate,
+  gateTeamAffiliationPreviewMigrate,
   isCommentRepliesPreviewBranch,
+  isTeamAffiliationPreviewBranch,
   COMMENT_REPLIES_MIGRATION,
+  TEAM_AFFILIATION_MIGRATION,
 } = require("../maintenance/single-migration-gate.cjs");
 const mode = process.argv[2];
 const localHarness = process.argv.includes("--local-harness");
@@ -116,6 +119,14 @@ ROLLBACK;`);
   report.comment_id_fingerprint = commentCounts.comment_id_fingerprint || "empty";
 }
 
+const rosterPrint = psql(`BEGIN TRANSACTION READ ONLY;
+SELECT 'users_total=' || count(*)::text FROM "User";
+SELECT 'user_id_fingerprint=' || coalesce(md5(string_agg(id::text, ',' ORDER BY id)), 'empty') FROM "User";
+SELECT 'caddies_total=' || count(*)::text FROM "Caddy";
+SELECT 'caddy_id_fingerprint=' || coalesce(md5(string_agg(id::text, ',' ORDER BY id)), 'empty') FROM "Caddy";
+ROLLBACK;`);
+Object.assign(report, rosterPrint);
+
 if (mode === "seed-gate" && state === "MIGRATED") {
   const c = psql(`BEGIN TRANSACTION READ ONLY;
 SELECT 'users=' || count(*) FROM "User";
@@ -153,19 +164,56 @@ if (mode === "verify") {
   if (report.comment_id_fingerprint && vr.comment_id_fingerprint && report.comment_id_fingerprint !== vr.comment_id_fingerprint) {
     die("Comment id fingerprint changed; existing rows were modified");
   }
+  if (report.user_id_fingerprint && vr.user_id_fingerprint && report.user_id_fingerprint !== vr.user_id_fingerprint) {
+    die("User id fingerprint changed; existing rows were modified");
+  }
+  if (report.caddy_id_fingerprint && vr.caddy_id_fingerprint && report.caddy_id_fingerprint !== vr.caddy_id_fingerprint) {
+    die("Caddy id fingerprint changed; existing rows were modified");
+  }
+  if (report.users_total && vr.users_total && report.users_total !== vr.users_total) {
+    die(`User row count changed during verify ${report.users_total} → ${vr.users_total}`);
+  }
+  if (report.caddies_total && vr.caddies_total && report.caddies_total !== vr.caddies_total) {
+    die(`Caddy row count changed during verify ${report.caddies_total} → ${vr.caddies_total}`);
+  }
+  if (isTeamAffiliationPreviewBranch(process.env.PREVIEW_REF_NAME || process.env.GITHUB_REF_NAME || "")) {
+    if (vr.team_affiliation_version_table !== "1") die("TeamAffiliationVersion table missing");
+    if (vr.team_affiliation_item_table !== "1") die("TeamAffiliationItem table missing");
+    if (vr.team_affiliation_fk !== "1") die("TeamAffiliationItem versionId FK missing");
+    if (vr.team_affiliation_migration !== "1") die("team_affiliation_settings migration not finished");
+    if (Number(vr.team_affiliation_versions) !== 0) {
+      die("TeamAffiliationVersion must be empty after migrate (no seed)");
+    }
+    if (Number(vr.team_affiliation_items) !== 0) {
+      die("TeamAffiliationItem must be empty after migrate (no seed)");
+    }
+  }
   process.exit(0);
 }
 if (mode === "migrate-gate") {
   const refName = process.env.PREVIEW_REF_NAME || process.env.GITHUB_REF_NAME || "";
   report.ref_name = refName;
   console.log(`ref_name=${refName}`);
-  if (isCommentRepliesPreviewBranch(refName)) {
-    if (!hasPm) die("HOLD: comment-replies migrate requires _prisma_migrations");
+  const namedGate = isTeamAffiliationPreviewBranch(refName)
+    ? {
+        label: "team_affiliation",
+        target: TEAM_AFFILIATION_MIGRATION,
+        run: gateTeamAffiliationPreviewMigrate,
+      }
+    : isCommentRepliesPreviewBranch(refName)
+      ? {
+          label: "comment_replies",
+          target: COMMENT_REPLIES_MIGRATION,
+          run: gateCommentRepliesPreviewMigrate,
+        }
+      : null;
+  if (namedGate) {
+    if (!hasPm) die(`HOLD: ${namedGate.label} migrate requires _prisma_migrations`);
     const repoAgain = listRepoMigrations(path.join(__dirname, "..", "..", "prisma", "migrations"));
     const again = readPrismaMigrationNames();
     const pending = repoAgain.filter((m) => !again.applied.includes(m));
     const pendingFirst = repoMigrations.filter((m) => !applied.includes(m));
-    const gate = gateCommentRepliesPreviewMigrate({
+    const gate = namedGate.run({
       refName,
       previewProjectId: process.env.PREVIEW_PROJECT_ID,
       neonEndpoint: base.neon_endpoint,
@@ -178,8 +226,8 @@ if (mode === "migrate-gate") {
       failedNamesAgain: again.failedNames,
       statusPendingAgain: pending,
     });
-    console.log(`comment_replies_gate=${gate.action}`);
-    console.log(`comment_replies_target=${COMMENT_REPLIES_MIGRATION}`);
+    console.log(`${namedGate.label}_gate=${gate.action}`);
+    console.log(`${namedGate.label}_target=${namedGate.target}`);
     console.log(`pending_migrations=${pending.length}`);
     if (gate.action !== "allow") die(`HOLD: ${gate.reason}`);
     process.exit(0);

@@ -141,12 +141,18 @@ function gateSingleMigration(input) {
 }
 
 const COMMENT_REPLIES_MIGRATION = "20261109193000_comment_replies_v1";
+const TEAM_AFFILIATION_MIGRATION = "20261117233000_team_affiliation_settings";
 const PREVIEW_PROJECT_ID = "lucky-mode-29989630";
 const PREVIEW_NEON_ENDPOINT = "ep-odd-voice-aokrqp5t";
 const COMMENT_REPLIES_BRANCH_RE = /^preview-db-comment-replies-.+/;
+const TEAM_AFFILIATION_BRANCH_RE = /^preview-db-pr379-team-affiliation-.+/;
 
 function isCommentRepliesPreviewBranch(refName) {
   return COMMENT_REPLIES_BRANCH_RE.test(String(refName || ""));
+}
+
+function isTeamAffiliationPreviewBranch(refName) {
+  return TEAM_AFFILIATION_BRANCH_RE.test(String(refName || ""));
 }
 
 function listsEqual(a, b) {
@@ -160,15 +166,15 @@ function listsEqual(a, b) {
 }
 
 /**
- * Extra Preview migrate-gate for comment-replies branches only.
- * Other preview-db-* branches should skip and keep the generic EMPTY/PARTIAL rule.
+ * Extra Preview migrate-gate for a named single-migration branch.
+ * Reuses gateSingleMigration; requires Preview project/endpoint and a stable pending set.
  *
  * @returns {{ action: 'skip' | 'allow' | 'hold', reason: string }}
  */
-function gateCommentRepliesPreviewMigrate(input) {
+function gatePreviewNamedSingleMigration(input, spec) {
   const refName = input && input.refName;
-  if (!isCommentRepliesPreviewBranch(refName)) {
-    return { action: "skip", reason: "not a comment-replies preview branch" };
+  if (!spec.isTargetBranch(refName)) {
+    return { action: "skip", reason: spec.skipReason };
   }
   if (input.previewProjectId !== PREVIEW_PROJECT_ID) {
     return {
@@ -185,14 +191,14 @@ function gateCommentRepliesPreviewMigrate(input) {
   }
 
   const first = gateSingleMigration({
-    target: COMMENT_REPLIES_MIGRATION,
+    target: spec.target,
     repo: input.repo,
     appliedFinished: input.appliedFinished,
     failedNames: input.failedNames,
     statusPending: input.statusPending,
   });
   const second = gateSingleMigration({
-    target: COMMENT_REPLIES_MIGRATION,
+    target: spec.target,
     repo: input.repoAgain != null ? input.repoAgain : input.repo,
     appliedFinished:
       input.appliedFinishedAgain != null ? input.appliedFinishedAgain : input.appliedFinished,
@@ -212,12 +218,40 @@ function gateCommentRepliesPreviewMigrate(input) {
   return { ...first, action: "allow", reason: first.reason };
 }
 
+/**
+ * Extra Preview migrate-gate for comment-replies branches only.
+ * Other preview-db-* branches should skip and keep the generic EMPTY/PARTIAL rule
+ * unless they have their own named gate.
+ */
+function gateCommentRepliesPreviewMigrate(input) {
+  return gatePreviewNamedSingleMigration(input, {
+    isTargetBranch: isCommentRepliesPreviewBranch,
+    skipReason: "not a comment-replies preview branch",
+    target: COMMENT_REPLIES_MIGRATION,
+  });
+}
+
+/**
+ * Extra Preview migrate-gate for PR #379 team-affiliation dedicated branches only.
+ */
+function gateTeamAffiliationPreviewMigrate(input) {
+  return gatePreviewNamedSingleMigration(input, {
+    isTargetBranch: isTeamAffiliationPreviewBranch,
+    skipReason: "not a team-affiliation preview branch",
+    target: TEAM_AFFILIATION_MIGRATION,
+  });
+}
+
 module.exports = {
   parsePrismaMigrateStatusPending,
   gateSingleMigration,
+  gatePreviewNamedSingleMigration,
   gateCommentRepliesPreviewMigrate,
+  gateTeamAffiliationPreviewMigrate,
   isCommentRepliesPreviewBranch,
+  isTeamAffiliationPreviewBranch,
   COMMENT_REPLIES_MIGRATION,
+  TEAM_AFFILIATION_MIGRATION,
   PREVIEW_PROJECT_ID,
   PREVIEW_NEON_ENDPOINT,
 };

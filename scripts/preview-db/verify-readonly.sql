@@ -43,5 +43,19 @@ UNION ALL SELECT 'comment_parentid_fk_delete=' || coalesce((
   ), 'missing')
 UNION ALL SELECT 'comment_replies_migration=' || count(*)::text FROM "_prisma_migrations"
   WHERE migration_name='20261109193000_comment_replies_v1'
+    AND finished_at IS NOT NULL AND rolled_back_at IS NULL
+UNION ALL SELECT 'user_id_fingerprint=' || coalesce(md5(string_agg(id::text, ',' ORDER BY id)), 'empty') FROM "User"
+UNION ALL SELECT 'caddy_id_fingerprint=' || coalesce(md5(string_agg(id::text, ',' ORDER BY id)), 'empty') FROM "Caddy"
+UNION ALL SELECT 'team_affiliation_version_table=' || count(*)::text FROM information_schema.tables
+  WHERE table_schema='public' AND table_name='TeamAffiliationVersion'
+UNION ALL SELECT 'team_affiliation_item_table=' || count(*)::text FROM information_schema.tables
+  WHERE table_schema='public' AND table_name='TeamAffiliationItem'
+UNION ALL SELECT 'team_affiliation_fk=' || count(*)::text FROM information_schema.table_constraints
+  WHERE table_schema='public' AND table_name='TeamAffiliationItem' AND constraint_type='FOREIGN KEY'
+    AND constraint_name='TeamAffiliationItem_versionId_fkey'
+UNION ALL SELECT 'team_affiliation_versions=' || count(*)::text FROM "TeamAffiliationVersion"
+UNION ALL SELECT 'team_affiliation_items=' || count(*)::text FROM "TeamAffiliationItem"
+UNION ALL SELECT 'team_affiliation_migration=' || count(*)::text FROM "_prisma_migrations"
+  WHERE migration_name='20261117233000_team_affiliation_settings'
     AND finished_at IS NOT NULL AND rolled_back_at IS NULL;
 ROLLBACK;
