@@ -22,6 +22,7 @@ import {
   OFF_SNAPSHOT_REQUIRED_USER_MESSAGE,
   parseOffSnapshot,
 } from "@/lib/offSnapshot";
+import { loadTeamAffiliationSnapshot } from "@/lib/teamAffiliationService";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -93,7 +94,7 @@ export async function POST(req: NextRequest) {
 
     const tPool = Date.now();
     const tSupport = Date.now();
-    const [poolResult, supportResult] = await Promise.all([
+    const [poolResult, supportResult, teamAffiliation] = await Promise.all([
       resolveCanonicalLivePool(previous.date, regularCaddyPool, {
         offSheetMode: "snapshot",
         offSnapshot,
@@ -111,6 +112,7 @@ export async function POST(req: NextRequest) {
         specialSupportByShift,
         ms: Date.now() - tSupport,
       })),
+      loadTeamAffiliationSnapshot(previous.date),
     ]);
 
     const result = await applyQuickBoardMutation({
@@ -122,6 +124,7 @@ export async function POST(req: NextRequest) {
       change,
       changeType: (body as { changeType?: LiveChangeType }).changeType,
       specialSupportByShift: supportResult.specialSupportByShift,
+      teamAffiliation,
       draft: {
         date: String(draft.date || previous.date),
         expectedVersion: Number(draft.version),

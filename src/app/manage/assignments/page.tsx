@@ -172,7 +172,10 @@ import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
 import {
   DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  TEAM_AFFILIATION_CHANGED_MESSAGE,
+  defaultTeamAffiliationSnapshot,
   isThirdAffiliatedTeam,
+  sameTeamAffiliationRules,
   thirdTeamsInSnapshot,
   type TeamAffiliationSnapshot,
 } from "@/lib/teamAffiliation";
@@ -1280,6 +1283,7 @@ export default function ManageAssignmentsOpsPage() {
       setOpsDutySheetPreview(null);
       setThirdWeekly(null);
       setPublished(null);
+      setTeamAffiliation(DEFAULT_TEAM_AFFILIATION_SNAPSHOT);
       return;
     }
     const gen = ++loadGen.current;
@@ -1289,22 +1293,23 @@ export default function ManageAssignmentsOpsPage() {
     setDraft(null);
     setAutoResult(null);
     setDraftSaveState("idle");
+    setTeamAffiliation(defaultTeamAffiliationSnapshot(date));
     (async () => {
       try {
-        fetch(
-          `/api/team-affiliations?date=${encodeURIComponent(date)}`,
-          { credentials: "include", cache: "no-store" }
-        )
-          .then((r) => r.json().catch(() => ({})))
-          .then((aff) => {
-            if (cancelled || gen !== loadGen.current) return;
-            if (aff?.snapshot) setTeamAffiliation(aff.snapshot);
-          })
-          .catch(() => {});
-        const res = await fetch(
-          `/api/assignments/date-bundle?date=${encodeURIComponent(date)}`,
-          { credentials: "include", cache: "no-store" }
-        );
+        const [affRes, res] = await Promise.all([
+          fetch(
+            `/api/team-affiliations?date=${encodeURIComponent(date)}`,
+            { credentials: "include", cache: "no-store" }
+          ),
+          fetch(
+            `/api/assignments/date-bundle?date=${encodeURIComponent(date)}`,
+            { credentials: "include", cache: "no-store" }
+          ),
+        ]);
+        const aff = (await affRes.json().catch(() => ({}))) as {
+          snapshot?: TeamAffiliationSnapshot;
+          error?: string;
+        };
         const data = (await res.json().catch(() => ({}))) as {
           ok?: boolean;
           date?: string;
@@ -1352,6 +1357,12 @@ export default function ManageAssignmentsOpsPage() {
           boardPreview?: BoardPushPreviewState | null;
           errors?: Record<string, { error?: string }>;
         };
+        if (cancelled || gen !== loadGen.current) return;
+        if (aff?.snapshot) {
+          setTeamAffiliation(aff.snapshot);
+        } else {
+          setTeamAffiliation(defaultTeamAffiliationSnapshot(date));
+        }
         if (
           !shouldApplyAssignmentsDateBundle({
             requestGen: gen,
@@ -1366,7 +1377,15 @@ export default function ManageAssignmentsOpsPage() {
         if (!res.ok) {
           throw new Error(data.error || "날짜 묶음 조회 실패");
         }
-        setDateLoadWarnings(dateBundleSectionWarnings(data.errors));
+        const loadWarnings = dateBundleSectionWarnings(data.errors);
+        if (!affRes.ok || !aff?.snapshot) {
+          loadWarnings.push(
+            aff?.error
+              ? `조 설정: ${aff.error}`
+              : "조 설정: 조회 실패 — 기본 1~8 HOUSE / 9~12 THIRD를 표시합니다."
+          );
+        }
+        setDateLoadWarnings(loadWarnings);
         setDateBundleReady(true);
         setSpecialDutyBundle(data.specialDuties ?? null);
         setSpecialDutyBundleError(data.errors?.specialDuties?.error ?? null);
@@ -4334,6 +4353,12 @@ export default function ManageAssignmentsOpsPage() {
             {dateLoadWarnings.map((line) => (
               <div key={line}>{line}</div>
             ))}
+          </div>
+        ) : null}
+        {draft?.teamAffiliation &&
+        !sameTeamAffiliationRules(draft.teamAffiliation, teamAffiliation) ? (
+          <div className="ops-error" role="status">
+            {TEAM_AFFILIATION_CHANGED_MESSAGE}
           </div>
         ) : null}
         {autoResult?.specialPlacement?.block && (

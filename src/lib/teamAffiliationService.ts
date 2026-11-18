@@ -5,7 +5,6 @@
  */
 
 import { prisma } from "@/lib/prisma";
-import { parseYmd } from "@/lib/availabilityEngine";
 import {
   DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
   TEAM_AFFILIATION_TEAMS,
@@ -15,6 +14,8 @@ import {
   parseTeamAffiliationVersionInput,
   parseTeamAffiliationYmd,
   snapshotFromRows,
+  teamAffiliationUtcDate,
+  teamAffiliationYmdFromDate,
   type TeamAffiliationKind,
   type TeamAffiliationRow,
   type TeamAffiliationSnapshot,
@@ -36,17 +37,7 @@ function isMissingTableError(e: unknown): boolean {
 }
 
 function ymdFromDate(value: Date | string): string {
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
-    return value.slice(0, 10);
-  }
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) {
-    throw new TeamAffiliationError("적용일을 해석할 수 없습니다.");
-  }
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return teamAffiliationYmdFromDate(value);
 }
 
 function rowsFromItems(
@@ -82,7 +73,7 @@ export async function loadTeamAffiliationSnapshot(
   const date = parseTeamAffiliationYmd(ymd);
   try {
     const version = await prisma.teamAffiliationVersion.findFirst({
-      where: { effectiveFrom: { lte: parseYmd(date).start } },
+      where: { effectiveFrom: { lte: teamAffiliationUtcDate(date) } },
       orderBy: { effectiveFrom: "desc" },
       include: { items: { orderBy: { team: "asc" } } },
     });
@@ -137,7 +128,7 @@ export async function saveTeamAffiliationVersion(input: {
   const parsed: TeamAffiliationVersionInput = parseTeamAffiliationVersionInput(
     input.body
   );
-  const effectiveFrom = parseYmd(parsed.effectiveFrom).start;
+  const effectiveFrom = teamAffiliationUtcDate(parsed.effectiveFrom);
   try {
     const saved = await prisma.$transaction(async (tx) => {
       const existing = await tx.teamAffiliationVersion.findUnique({

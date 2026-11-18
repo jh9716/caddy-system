@@ -52,6 +52,10 @@ import {
   overlayLatestEmploymentStatus,
 } from "@/lib/assignableRoster";
 import { mergeDraftOnlyReservationFlags } from "@/lib/assignmentBoardDirectEdit";
+import {
+  cloneTeamAffiliationSnapshot,
+  type TeamAffiliationSnapshot,
+} from "@/lib/teamAffiliation";
 
 export type DraftStatus = "DRAFT" | "EDITED" | "CONFIRMED" | "APPLIED";
 
@@ -77,6 +81,8 @@ export type AssignmentDraft = {
   offSnapshot?: DraftOffSnapshot;
   /** 표시 전용 코스별 운영 티. 엔진/예약 건수에 넣지 않는다. */
   teeSheet?: CourseTeeSlot[];
+  /** 이 작업본을 만들 때 사용한 조 소속. reflow가 최신 설정으로 조용히 바뀌지 않게 한다. */
+  teamAffiliation?: TeamAffiliationSnapshot | null;
   confirmedAt: string | null;
   appliedAt?: string | null;
   applyAuditId?: number | null;
@@ -176,6 +182,13 @@ export function createDraftFromAutoResult(
             caddyId: row.caddyId,
             effectiveFromShift: row.effectiveFromShift,
           })),
+        }
+      : {}),
+    ...(result.meta.teamAffiliation
+      ? {
+          teamAffiliation: cloneTeamAffiliationSnapshot(
+            result.meta.teamAffiliation
+          ),
         }
       : {}),
   };
@@ -1184,12 +1197,19 @@ export function autoResultFromDraft(
       spare1: s.spare1 ? { ...s.spare1 } : null,
       spare2: s.spare2 ? { ...s.spare2 } : null,
     })),
-    meta: { ...fallbackMeta, ...(base?.meta || {}), ...{
+    meta: {
+      ...fallbackMeta,
+      ...(base?.meta || {}),
       assignedCount: assignments.length,
       unassignedCount: draft.unassignedReservations.length,
       closedCourseCount: draft.closedCourseReservations.length,
       unusedCount: unusedCaddies(draft).length,
-    } },
+      ...(draft.teamAffiliation
+        ? {
+            teamAffiliation: cloneTeamAffiliationSnapshot(draft.teamAffiliation),
+          }
+        : {}),
+    },
   };
 }
 
@@ -1225,6 +1245,11 @@ export function applyLiveResultToDraft(
       ? { offSnapshot: draft.offSnapshot }
       : {}),
     ...(teeSheet ? { teeSheet } : {}),
+    ...(next.teamAffiliation
+      ? { teamAffiliation: next.teamAffiliation }
+      : draft.teamAffiliation
+        ? { teamAffiliation: cloneTeamAffiliationSnapshot(draft.teamAffiliation) }
+        : {}),
   };
 }
 

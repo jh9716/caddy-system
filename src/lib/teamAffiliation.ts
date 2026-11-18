@@ -90,6 +90,30 @@ export function parseTeamAffiliationYmd(value: unknown): string {
   return ymd;
 }
 
+/** Calendar date as UTC midnight. Server TZ(UTC / Asia/Seoul)와 무관. */
+export function teamAffiliationUtcDate(ymd: string): Date {
+  const date = parseTeamAffiliationYmd(ymd);
+  return new Date(`${date}T00:00:00.000Z`);
+}
+
+export function teamAffiliationYmdFromDate(value: Date | string): string {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10);
+  }
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    throw new TeamAffiliationError("적용일을 해석할 수 없습니다.");
+  }
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export const TEAM_AFFILIATION_CHANGED_CODE = "TEAM_AFFILIATION_CHANGED";
+export const TEAM_AFFILIATION_CHANGED_MESSAGE =
+  "이 작업본을 만든 뒤 조 소속 설정이 바뀌었습니다. 예약 변경·병가는 기존 소속으로 계산합니다. 새 설정을 쓰려면 날짜를 새로고침하거나 자동배치를 다시 실행하세요.";
+
 function emptyRows(): TeamAffiliationRow[] {
   return TEAM_AFFILIATION_TEAMS.map((team) => ({
     team,
@@ -150,6 +174,144 @@ export function snapshotFromRows(
     source: meta?.source ?? "version",
     versionId: meta?.versionId ?? null,
     rows: merged,
+  };
+}
+
+export function teamAffiliationRuleKey(
+  snapshot?: TeamAffiliationSnapshot | null
+): string {
+  const src = snapshot ?? DEFAULT_TEAM_AFFILIATION_SNAPSHOT;
+  return src.rows
+    .map(
+      (row) => `${row.team}:${row.affiliation}:${row.operational ? "1" : "0"}`
+    )
+    .join("|");
+}
+
+export function sameTeamAffiliationRules(
+  a?: TeamAffiliationSnapshot | null,
+  b?: TeamAffiliationSnapshot | null
+): boolean {
+  return teamAffiliationRuleKey(a) === teamAffiliationRuleKey(b);
+}
+
+export function parseTeamAffiliationSnapshot(
+  value: unknown,
+  date?: string
+): TeamAffiliationSnapshot | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const rec = value as Record<string, unknown>;
+  const rowsRaw = rec.rows;
+  if (!Array.isArray(rowsRaw)) return null;
+  const seen = new Set<string>();
+  const rows: TeamAffiliationRow[] = [];
+  for (const raw of rowsRaw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const row = raw as Record<string, unknown>;
+    const team = String(row.team ?? "").trim();
+    if (!isTeamAffiliationTeam(team) || seen.has(team)) return null;
+    seen.add(team);
+    try {
+      rows.push({
+        team,
+        affiliation: parseTeamAffiliationKind(row.affiliation),
+        operational:
+          row.operational === undefined
+            ? true
+            : parseOperationalFlag(row.operational),
+      });
+    } catch {
+      return null;
+    }
+  }
+  if (seen.size !== TEAM_AFFILIATION_TEAMS.length) return null;
+  const ymd =
+    typeof rec.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(rec.date)
+      ? rec.date
+      : date && /^\d{4}-\d{2}-\d{2}$/.test(date)
+        ? date
+        : "1970-01-01";
+  const versionId =
+    rec.versionId == null || rec.versionId === ""
+      ? null
+      : Number(rec.versionId);
+  const effectiveFrom =
+    typeof rec.effectiveFrom === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(rec.effectiveFrom)
+      ? rec.effectiveFrom
+      : null;
+  return snapshotFromRows(ymd, rows, {
+    effectiveFrom,
+    source: rec.source === "default" ? "default" : "version",
+    versionId: Number.isInteger(versionId) ? versionId : null,
+  });
+}
+
+export type ResolvedReflowTeamAffiliation = {
+  snapshot: TeamAffiliationSnapshot;
+  bound: TeamAffiliationSnapshot | null;
+  live: TeamAffiliationSnapshot;
+  conflict: boolean;
+  usedBound: boolean;
+  warning?: { level: "warn"; code: string; message: string };
+};
+
+/**
+ * 작업본에 묶인 스냅샷이 있으면 그것을 쓰고, 최신 설정과 다르면 조용히 바꾸지 않는다.
+ * live가 없으면 bound(또는 기본값)만 사용한다.
+ */
+export function resolveReflowTeamAffiliation(input: {
+  live?: TeamAffiliationSnapshot | null;
+  bound?: TeamAffiliationSnapshot | null;
+  acceptRefresh?: boolean;
+}): ResolvedReflowTeamAffiliation {
+  const bound = input.bound
+    ? cloneTeamAffiliationSnapshot(input.bound)
+    : null;
+  const live = input.live
+    ? cloneTeamAffiliationSnapshot(input.live)
+    : bound
+      ? cloneTeamAffiliationSnapshot(bound)
+      : cloneTeamAffiliationSnapshot(DEFAULT_TEAM_AFFILIATION_SNAPSHOT);
+  if (!bound) {
+    return {
+      snapshot: live,
+      bound: null,
+      live,
+      conflict: false,
+      usedBound: false,
+    };
+  }
+  const conflict = !sameTeamAffiliationRules(bound, live);
+  if (conflict && input.acceptRefresh) {
+    return {
+      snapshot: live,
+      bound,
+      live,
+      conflict: true,
+      usedBound: false,
+    };
+  }
+  if (conflict) {
+    return {
+      snapshot: bound,
+      bound,
+      live,
+      conflict: true,
+      usedBound: true,
+      warning: {
+        level: "warn",
+        code: TEAM_AFFILIATION_CHANGED_CODE,
+        message: TEAM_AFFILIATION_CHANGED_MESSAGE,
+      },
+    };
+  }
+  return {
+    snapshot: bound,
+    bound,
+    live,
+    conflict: false,
+    usedBound: true,
   };
 }
 

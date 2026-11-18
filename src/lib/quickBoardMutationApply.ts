@@ -67,6 +67,7 @@ import {
   snapshotComputePool,
 } from "@/lib/caddyPoolCanonical";
 import { rejectStaleLivePrevious } from "@/lib/liveAssignmentFreshness";
+import type { TeamAffiliationSnapshot } from "@/lib/teamAffiliation";
 
 function placedCaddyIds(previous: AutoAssignResultV1): Set<number> {
   return placedCaddyIdsFromBoard(previous);
@@ -92,6 +93,7 @@ export async function applyQuickBoardMutation(input: {
   change?: LiveChangeInput;
   changeType?: LiveChangeType;
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
+  teamAffiliation?: TeamAffiliationSnapshot | null;
   draft: {
     date: string;
     expectedVersion: number;
@@ -220,6 +222,7 @@ export async function applyQuickBoardMutation(input: {
     events,
     changeType: input.changeType || input.change?.type,
     specialSupportByShift: input.specialSupportByShift,
+    teamAffiliation: input.teamAffiliation,
   });
   const computeMs = Date.now() - computeStarted;
   const blocking = preview.warnings.filter((w) => w.level === "error");

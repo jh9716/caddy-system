@@ -43,6 +43,7 @@ import {
   reservationMatchesIdentity,
 } from "@/lib/reservationIdentity";
 import { rejectStaleLivePrevious } from "@/lib/liveAssignmentFreshness";
+import type { TeamAffiliationSnapshot } from "@/lib/teamAffiliation";
 
 export const LIVE_CHANGE_TYPES = [
   "CANCEL_RESERVATION",
@@ -403,12 +404,32 @@ export function eventsFromLiveChange(
   }
 }
 
+function reflowWithTeamAffiliation(input: {
+  previous: AutoAssignResultV1;
+  regularCaddyPool: AutoAssignCaddy[];
+  events: ReservationChangeEvent[];
+  specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
+  teamAffiliation?: TeamAffiliationSnapshot | null;
+  acceptTeamAffiliationRefresh?: boolean;
+}): RegularReflowResult {
+  return reflowRegularAssignments({
+    previous: input.previous,
+    regularCaddyPool: input.regularCaddyPool,
+    events: input.events,
+    specialSupportByShift: input.specialSupportByShift,
+    teamAffiliation: input.teamAffiliation,
+    acceptTeamAffiliationRefresh: input.acceptTeamAffiliationRefresh,
+  });
+}
+
 /** preview 전용. prisma / writer 를 호출하지 않는다. */
 export function previewLiveAssignmentChange(input: {
   previous: AutoAssignResultV1;
   regularCaddyPool: AutoAssignCaddy[];
   change: LiveChangeInput;
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
+  teamAffiliation?: TeamAffiliationSnapshot | null;
+  acceptTeamAffiliationRefresh?: boolean;
 }): LiveChangePreview {
   if (input.change.type === "SET_HOUSE") {
     const key =
@@ -447,11 +468,13 @@ export function previewLiveAssignmentChange(input: {
     };
   }
   const events = eventsFromLiveChange(input.change);
-  const reflow = reflowRegularAssignments({
+  const reflow = reflowWithTeamAffiliation({
     previous: input.previous,
     regularCaddyPool: input.regularCaddyPool,
     events,
     specialSupportByShift: input.specialSupportByShift,
+    teamAffiliation: input.teamAffiliation,
+    acceptTeamAffiliationRefresh: input.acceptTeamAffiliationRefresh,
   });
   return {
     ...reflow,
@@ -467,6 +490,8 @@ export function previewLiveChangeFromDraft(input: {
   change: LiveChangeInput;
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
   regularCaddyPool?: AutoAssignCaddy[];
+  teamAffiliation?: TeamAffiliationSnapshot | null;
+  acceptTeamAffiliationRefresh?: boolean;
 }): LiveChangePreview {
   const pool =
     input.regularCaddyPool ||
@@ -476,6 +501,8 @@ export function previewLiveChangeFromDraft(input: {
     regularCaddyPool: pool,
     change: input.change,
     specialSupportByShift: input.specialSupportByShift,
+    teamAffiliation: input.teamAffiliation,
+    acceptTeamAffiliationRefresh: input.acceptTeamAffiliationRefresh,
   });
 }
 
@@ -547,12 +574,16 @@ export function previewLiveAssignmentEvents(input: {
   events: ReservationChangeEvent[];
   changeType?: LiveChangeType;
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
+  teamAffiliation?: TeamAffiliationSnapshot | null;
+  acceptTeamAffiliationRefresh?: boolean;
 }): LiveChangePreview {
-  const reflow = reflowRegularAssignments({
+  const reflow = reflowWithTeamAffiliation({
     previous: input.previous,
     regularCaddyPool: input.regularCaddyPool,
     events: input.events,
     specialSupportByShift: input.specialSupportByShift,
+    teamAffiliation: input.teamAffiliation,
+    acceptTeamAffiliationRefresh: input.acceptTeamAffiliationRefresh,
   });
   return {
     ...reflow,
@@ -1278,6 +1309,8 @@ export async function applyLiveAssignmentChange(
     events?: ReservationChangeEvent[];
     changeType?: LiveChangeType;
     specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
+    teamAffiliation?: TeamAffiliationSnapshot | null;
+    acceptTeamAffiliationRefresh?: boolean;
   },
   options: {
     prisma?: PrismaClient;
@@ -1305,6 +1338,8 @@ export async function applyLiveAssignmentChange(
       regularCaddyPool: input.regularCaddyPool,
       change,
       specialSupportByShift: input.specialSupportByShift,
+      teamAffiliation: input.teamAffiliation,
+      acceptTeamAffiliationRefresh: input.acceptTeamAffiliationRefresh,
     });
     return {
       ok: true,
@@ -1344,6 +1379,8 @@ export async function applyLiveAssignmentChange(
     events,
     changeType: input.changeType || input.change?.type,
     specialSupportByShift: input.specialSupportByShift,
+    teamAffiliation: input.teamAffiliation,
+    acceptTeamAffiliationRefresh: input.acceptTeamAffiliationRefresh,
   });
   const computeMs = Date.now() - computeStarted;
   const blocking = preview.warnings.filter((w) => w.level === "error");

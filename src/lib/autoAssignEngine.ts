@@ -20,8 +20,10 @@
 import { PRIMARY_TEAMS } from "@/lib/caddyManage";
 import {
   DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  cloneTeamAffiliationSnapshot,
   isInactiveTeamCaddy,
   resolveAssignCaddyType,
+  resolveReflowTeamAffiliation,
   type TeamAffiliationSnapshot,
 } from "@/lib/teamAffiliation";
 import { isWeekendBandPriorityDate } from "@/lib/krHolidays";
@@ -6108,15 +6110,21 @@ export function reflowRegularAssignments(input: {
   /** 서버에서 다시 읽은 특수지원 큐. caddyPool에 넣지 않는다. */
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
   teamAffiliation?: TeamAffiliationSnapshot | null;
+  acceptTeamAffiliationRefresh?: boolean;
 }): RegularReflowResult {
   let previous = input.previous;
   const date = previous.date;
-  const teamAffiliation =
-    input.teamAffiliation ??
-    previous.meta.teamAffiliation ??
-    DEFAULT_TEAM_AFFILIATION_SNAPSHOT;
+  const resolvedAffiliation = resolveReflowTeamAffiliation({
+    live: input.teamAffiliation,
+    bound: previous.meta.teamAffiliation,
+    acceptRefresh: input.acceptTeamAffiliationRefresh,
+  });
+  const teamAffiliation = resolvedAffiliation.snapshot;
   let events = input.events || [];
   const warnings: ReflowWarning[] = [];
+  if (resolvedAffiliation.warning) {
+    warnings.push(resolvedAffiliation.warning);
+  }
   const fullPool = dedupeCaddies([...(input.regularCaddyPool || [])]);
 
   const swapEvents = events.filter(
@@ -6811,6 +6819,7 @@ export function reflowRegularAssignments(input: {
       drivingPoolCount: pools.driving.length,
       byShift,
       finalPointer: regular.finalPointer,
+      teamAffiliation: cloneTeamAffiliationSnapshot(teamAffiliation),
     },
     specialPlacement: {
       ...placementPolicy,

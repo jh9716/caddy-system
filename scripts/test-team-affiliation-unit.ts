@@ -4,11 +4,26 @@
  *
  * 운영 명단·재직상태·확정 배치표는 이 테스트가 바꾸지 않는다.
  */
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  previewLiveAssignmentChange,
+  previewLiveAssignmentEvents,
+} from "../src/lib/assignmentChange";
+import {
+  autoResultFromDraft,
+  createDraftFromAutoResult,
+} from "../src/lib/assignmentDraft";
+import {
+  assignmentDraftToPayload,
+  parseDailyBoardDraftPayload,
+  payloadToAssignmentDraft,
+} from "../src/lib/dailyBoardDraft";
+import {
   computeAutoAssignmentsV1,
   isHouseStartCandidate,
+  reservationKey,
   splitCaddyPools,
   ThirdStartCaddyError,
   type AutoAssignCaddy,
@@ -25,6 +40,7 @@ import {
 } from "../src/lib/thirdWeeklyRotation";
 import {
   DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  TEAM_AFFILIATION_CHANGED_CODE,
   TEAM_AFFILIATION_TEAMS,
   defaultTeamAffiliationSnapshot,
   houseTenThirdOffSnapshot,
@@ -33,11 +49,16 @@ import {
   isHouseAffiliatedTeam,
   isInactiveTeamCaddy,
   isThirdAffiliatedTeam,
+  parseTeamAffiliationSnapshot,
   parseTeamAffiliationVersionInput,
   pickLatestAffiliationVersion,
   resolveAssignCaddyType,
+  resolveReflowTeamAffiliation,
   rosterBandSpans,
+  sameTeamAffiliationRules,
   snapshotFromRows,
+  teamAffiliationUtcDate,
+  teamAffiliationYmdFromDate,
   teamsWithAffiliation,
   thirdTeamsInSnapshot,
   type TeamAffiliationSnapshot,
@@ -547,7 +568,9 @@ section("소스: 엔진/API가 조 번호 하드코딩으로 9조를 THIRD 고�
   );
   const manage = fs.readFileSync(path.resolve("src/lib/caddyManage.ts"), "utf8");
   assert(
-    /resolveAssignCaddyType/.test(engine) && /teamAffiliation/.test(engine),
+    /resolveAssignCaddyType/.test(engine) &&
+      /teamAffiliation/.test(engine) &&
+      /resolveReflowTeamAffiliation/.test(engine),
     "엔진이 스냅샷 소속을 사용"
   );
   assert(
@@ -555,6 +578,291 @@ section("소스: 엔진/API가 조 번호 하드코딩으로 9조를 THIRD 고�
       /resolveTeamAffiliation/.test(manage),
     "resolveCaddyTypeFromTeam이 스냅샷을 받음"
   );
+}
+
+section("reflow 경로: 9·10조 HOUSE 작업본은 live default에 덮이지 않음");
+{
+  const date = "2026-11-16";
+  const snap = houseTenThirdOffSnapshot(date);
+  const available = [
+    caddy(101, "1조", 1, { caddyType: "HOUSE", name: "일조" }),
+    caddy(901, "9조", 1, { caddyType: "THIRD", name: "구조" }),
+    caddy(1001, "10조", 1, { caddyType: "THIRD", name: "십조" }),
+  ];
+  const previous = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations: reservations(date, [
+      { shift: "1부", count: 2 },
+      { shift: "2부", count: 1 },
+    ]),
+    houseStartCaddyId: 101,
+    teamAffiliation: snap,
+  });
+  assert(
+    previous.assignments.some((a) => a.caddy.id === 901),
+    "초기 배치에 9조 HOUSE"
+  );
+  assert(
+    previous.assignments.some((a) => a.caddy.id === 1001),
+    "초기 배치에 10조 HOUSE"
+  );
+  const target = previous.assignments.find((a) => a.caddy.id === 901)!;
+  const moved = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: available,
+    change: {
+      type: "MOVE_RESERVATION",
+      reservationKey: reservationKey(target.reservation),
+      to: { course: "VERTHILL", shift: "2부", teeTime: "12:07" },
+    },
+    teamAffiliation: DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  });
+  assert(
+    moved.after.assignments.some((a) => a.caddy.id === 901),
+    "MOVE/change가 9조를 THIRD로 되돌리지 않음"
+  );
+  assert(
+    moved.warnings.some((w) => w.code === TEAM_AFFILIATION_CHANGED_CODE),
+    "MOVE 경로가 설정 변경을 안내"
+  );
+  const cancelled = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: available,
+    change: {
+      type: "CANCEL_RESERVATION",
+      reservationKey: reservationKey(target.reservation),
+    },
+    teamAffiliation: DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  });
+  assert(
+    cancelled.after.meta.housePoolCount === 3 &&
+      cancelled.after.meta.thirdPoolCount === 0,
+    "예약 취소 재계산도 9·10조 HOUSE 풀 유지"
+  );
+  assert(
+    isHouseAffiliatedTeam("10조", cancelled.after.meta.teamAffiliation),
+    "취소 후 meta 스냅샷도 10조 HOUSE"
+  );
+  const sick = previewLiveAssignmentEvents({
+    previous,
+    regularCaddyPool: available,
+    events: [{ type: "REMOVE_CADDY", caddyId: 101, cause: "SICK" }],
+    teamAffiliation: DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  });
+  assert(
+    sick.after.assignments.some((a) => a.caddy.id === 901),
+    "SICK/REMOVE도 9조 HOUSE 유지"
+  );
+  assert(
+    sick.warnings.some((w) => w.code === TEAM_AFFILIATION_CHANGED_CODE),
+    "SICK 경로도 설정 변경 안내"
+  );
+  const sameLive = previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: available,
+    change: {
+      type: "CANCEL_RESERVATION",
+      reservationKey: reservationKey(target.reservation),
+    },
+    teamAffiliation: snap,
+  });
+  assert(
+    !sameLive.warnings.some((w) => w.code === TEAM_AFFILIATION_CHANGED_CODE),
+    "같은 설정이면 충돌 경고 없음"
+  );
+}
+
+section("Draft 재로드 후 reflow는 작업본 스냅샷을 씀");
+{
+  const date = "2026-11-16";
+  const snap = houseTenThirdOffSnapshot(date);
+  const available = [
+    caddy(101, "1조", 1, { caddyType: "HOUSE" }),
+    caddy(901, "9조", 1, { caddyType: "THIRD" }),
+  ];
+  const computed = computeAutoAssignmentsV1({
+    date,
+    available,
+    reservations: reservations(date, [{ shift: "1부", count: 2 }]),
+    houseStartCaddyId: 101,
+    teamAffiliation: snap,
+  });
+  const draft = createDraftFromAutoResult(computed, available);
+  assert(
+    draft.teamAffiliation != null &&
+      sameTeamAffiliationRules(draft.teamAffiliation, snap),
+    "Draft에 조 설정 보존"
+  );
+  const payload = assignmentDraftToPayload(draft);
+  const parsed = parseDailyBoardDraftPayload(payload, date);
+  const reloaded = payloadToAssignmentDraft(parsed);
+  assert(
+    reloaded.teamAffiliation != null &&
+      sameTeamAffiliationRules(reloaded.teamAffiliation, snap),
+    "payload 재로드 후 조 설정 유지"
+  );
+  const previous = autoResultFromDraft(reloaded, null);
+  const after = previewLiveChangeFromDraftSafe(reloaded, previous, available);
+  assert(
+    after.after.meta.housePoolCount === 2 &&
+      after.after.meta.thirdPoolCount === 0,
+    "재로드 Draft reflow가 9조 HOUSE 풀 유지"
+  );
+  assert(
+    isHouseAffiliatedTeam("9조", after.after.meta.teamAffiliation),
+    "재로드 후 meta도 작업본 스냅샷"
+  );
+}
+
+section("같은 날짜 버전 충돌 해석");
+{
+  const bound = houseTenThirdOffSnapshot("2026-11-16");
+  const live = DEFAULT_TEAM_AFFILIATION_SNAPSHOT;
+  const kept = resolveReflowTeamAffiliation({ live, bound });
+  assert(kept.conflict && kept.usedBound, "충돌 시 작업본 유지");
+  assert(
+    isHouseAffiliatedTeam("9조", kept.snapshot),
+    "충돌 시 9조는 작업본 HOUSE"
+  );
+  const refreshed = resolveReflowTeamAffiliation({
+    live,
+    bound,
+    acceptRefresh: true,
+  });
+  assert(
+    refreshed.conflict && !refreshed.usedBound,
+    "명시적 새로고침만 live 사용"
+  );
+  assert(
+    isThirdAffiliatedTeam("9조", refreshed.snapshot),
+    "새로고침 후 9조 THIRD"
+  );
+  const unbound = resolveReflowTeamAffiliation({ live: bound, bound: null });
+  assert(!unbound.conflict && !unbound.usedBound, "구 Draft는 live 사용");
+}
+
+section("적용일 UTC 정규화 — TZ와 무관");
+{
+  const utc = teamAffiliationUtcDate("2026-11-16");
+  assert(
+    utc.toISOString() === "2026-11-16T00:00:00.000Z",
+    "저장 시각은 UTC midnight"
+  );
+  assert(
+    teamAffiliationYmdFromDate(utc) === "2026-11-16",
+    "UTC Date → YYYY-MM-DD"
+  );
+  assert(
+    teamAffiliationYmdFromDate("2026-11-16T15:30:00.000Z") === "2026-11-16",
+    "같은 UTC 날짜는 유지"
+  );
+  assert(
+    teamAffiliationYmdFromDate(new Date("2026-11-16T00:00:00+09:00")) ===
+      "2026-11-15",
+    "서울 local midnight는 UTC 날짜로 읽지 않음(저장 경로 금지 이유)"
+  );
+  assert(
+    parseTeamAffiliationSnapshot(houseTenThirdOffSnapshot("2026-11-16")) !=
+      null,
+    "스냅샷 JSON 파싱"
+  );
+  for (const tz of ["UTC", "Asia/Seoul", "America/New_York"]) {
+    const script = `
+      const ymd = "2026-11-16";
+      const d = new Date(ymd + "T00:00:00.000Z");
+      const out =
+        d.getUTCFullYear() +
+        "-" +
+        String(d.getUTCMonth() + 1).padStart(2, "0") +
+        "-" +
+        String(d.getUTCDate()).padStart(2, "0");
+      if (d.toISOString() !== "2026-11-16T00:00:00.000Z") process.exit(2);
+      if (out !== ymd) process.exit(3);
+    `;
+    const ran = spawnSync(process.execPath, ["-e", script], {
+      env: { ...process.env, TZ: tz },
+      encoding: "utf8",
+    });
+    assert(ran.status === 0, `TZ=${tz} 에서도 적용일 유지`);
+  }
+}
+
+section("소스: reflow 전 경로가 live 조 설정을 넘김");
+{
+  const reflow = fs.readFileSync(
+    path.resolve("src/app/api/assignments/reflow/route.ts"),
+    "utf8"
+  );
+  const apply = fs.readFileSync(
+    path.resolve("src/app/api/assignments/reflow/apply/route.ts"),
+    "utf8"
+  );
+  const quick = fs.readFileSync(
+    path.resolve("src/app/api/assignments/reflow/quick-mutation/route.ts"),
+    "utf8"
+  );
+  const move = fs.readFileSync(
+    path.resolve("src/app/api/assignments/reflow/quick-move/route.ts"),
+    "utf8"
+  );
+  const change = fs.readFileSync(
+    path.resolve("src/lib/assignmentChange.ts"),
+    "utf8"
+  );
+  const service = fs.readFileSync(
+    path.resolve("src/lib/teamAffiliationService.ts"),
+    "utf8"
+  );
+  const page = fs.readFileSync(
+    path.resolve("src/app/manage/assignments/page.tsx"),
+    "utf8"
+  );
+  assert(
+    /previewLiveAssignmentChange\(\{[\s\S]*teamAffiliation/.test(reflow) &&
+      /previewLiveAssignmentEvents\(\{[\s\S]*teamAffiliation/.test(reflow),
+    "reflow preview 경로에 teamAffiliation"
+  );
+  assert(
+    /loadTeamAffiliationSnapshot\(previous\.date\)/.test(apply) &&
+      /teamAffiliation,/.test(apply),
+    "reflow/apply가 live 스냅샷을 전달"
+  );
+  assert(
+    /loadTeamAffiliationSnapshot\(previous\.date\)/.test(quick) &&
+      /loadTeamAffiliationSnapshot\(previous\.date\)/.test(move),
+    "quick-mutation/quick-move가 live 스냅샷을 전달"
+  );
+  assert(
+    /function reflowWithTeamAffiliation/.test(change) &&
+      /acceptTeamAffiliationRefresh/.test(change),
+    "change preview가 teamAffiliation을 엔진에 전달"
+  );
+  assert(
+    /teamAffiliationUtcDate/.test(service) && !/parseYmd\(/.test(service),
+    "조 설정 저장/조회가 UTC 날짜만 사용"
+  );
+  assert(
+    /setTeamAffiliation\(defaultTeamAffiliationSnapshot\(date\)\)/.test(page) &&
+      /TEAM_AFFILIATION_CHANGED_MESSAGE/.test(page),
+    "날짜 변경 시 이전 조 설정을 비우고 충돌을 안내"
+  );
+}
+
+function previewLiveChangeFromDraftSafe(
+  draft: ReturnType<typeof createDraftFromAutoResult>,
+  previous: ReturnType<typeof autoResultFromDraft>,
+  pool: AutoAssignCaddy[]
+) {
+  return previewLiveAssignmentChange({
+    previous,
+    regularCaddyPool: pool,
+    change: {
+      type: "CANCEL_RESERVATION",
+      reservationKey: reservationKey(previous.assignments[0].reservation),
+    },
+    teamAffiliation: DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  });
 }
 
 if (failed > 0) {

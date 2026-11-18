@@ -26,6 +26,11 @@ import type {
 import { ensureReservationUid } from "@/lib/reservationIdentity";
 import { cloneCourseTeeSheet } from "@/lib/assignmentBoardTeeSheet";
 import {
+  cloneTeamAffiliationSnapshot,
+  parseTeamAffiliationSnapshot,
+  type TeamAffiliationSnapshot,
+} from "@/lib/teamAffiliation";
+import {
   COURSE_CODES,
   type CourseCode,
   type CourseTeeSlot,
@@ -81,6 +86,8 @@ export type DailyBoardDraftPayloadV1 = {
   offSnapshot?: DraftOffSnapshot;
   /** optional: 표시 전용 코스별 운영 티. legacy payload에는 없음. */
   teeSheet?: CourseTeeSlot[];
+  /** optional: 작업본을 만들 때 사용한 조 소속. legacy payload에는 없음. */
+  teamAffiliation?: TeamAffiliationSnapshot;
   confirmedAt: string | null;
   appliedAt: string | null;
   applyAuditId: number | null;
@@ -246,6 +253,11 @@ export function assignmentDraftToPayload(
       ? { offSnapshot: draft.offSnapshot }
       : {}),
     ...(teeSheet ? { teeSheet } : {}),
+    ...(draft.teamAffiliation
+      ? {
+          teamAffiliation: cloneTeamAffiliationSnapshot(draft.teamAffiliation),
+        }
+      : {}),
   };
 }
 
@@ -286,6 +298,11 @@ export function payloadToAssignmentDraft(
       ? { offSnapshot: payload.offSnapshot }
       : {}),
     ...(teeSheet ? { teeSheet } : {}),
+    ...(payload.teamAffiliation
+      ? {
+          teamAffiliation: cloneTeamAffiliationSnapshot(payload.teamAffiliation),
+        }
+      : {}),
   };
 }
 
@@ -529,6 +546,10 @@ export function parseDailyBoardDraftPayload(
   }
   const offSnapshot = parseOffSnapshot(o.offSnapshot);
   const teeSheet = parseOptionalTeeSheet(o.teeSheet);
+  const teamAffiliation = parseTeamAffiliationSnapshot(
+    o.teamAffiliation,
+    expectedDate
+  );
   return stampPayloadReservationIdentities({
     schemaVersion: DAILY_BOARD_DRAFT_SCHEMA_VERSION,
     date: expectedDate,
@@ -594,6 +615,7 @@ export function parseDailyBoardDraftPayload(
       ? { offSnapshot }
       : {}),
     ...(teeSheet ? { teeSheet } : {}),
+    ...(teamAffiliation ? { teamAffiliation } : {}),
   });
 }
 
