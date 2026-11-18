@@ -127,9 +127,13 @@ export function parseCaddyReassignRequest(body: unknown): {
 
 export function previewCaddyReassign(
   rows: ReassignCaddyRow[],
-  request: Pick<CaddyReassignRequest, "placements" | "mode">
+  request: Pick<CaddyReassignRequest, "placements" | "mode">,
+  teamAffiliation?: import("@/lib/teamAffiliation").TeamAffiliationSnapshot | null
 ): ReassignPlan {
-  return planCaddyReassign(rows, request.placements, { mode: request.mode });
+  return planCaddyReassign(rows, request.placements, {
+    mode: request.mode,
+    teamAffiliation,
+  });
 }
 
 export async function applyCaddyReassign(options: {
@@ -138,6 +142,7 @@ export async function applyCaddyReassign(options: {
   mode: ReassignMode;
   base?: ReassignBaseRow[];
   actor?: ReassignActor;
+  teamAffiliation?: import("@/lib/teamAffiliation").TeamAffiliationSnapshot | null;
 }): Promise<ReassignApplyResult> {
   const db = options.db as ReassignDb;
   if (typeof db.$transaction !== "function") {
@@ -187,6 +192,7 @@ export async function applyCaddyReassign(options: {
       const rows = locked.map(toPlanRow);
       const plan = planCaddyReassign(rows, options.placements, {
         mode: options.mode,
+        teamAffiliation: options.teamAffiliation,
       });
       assertReassignBase(rows, options.base, plan.affectedTeams, plan.requestedIds);
       throwIfPlanBlocked(plan);

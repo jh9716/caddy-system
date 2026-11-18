@@ -15,6 +15,7 @@ import { resolveCanonicalLivePool } from "@/lib/opsDutyLivePool";
 import { isOffSheetUnresolvedError } from "@/lib/caddyPoolCanonicalService";
 import { resolveDailySpecialPlacement } from "@/lib/dailySpecialDutyService";
 import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
+import { loadTeamAffiliationSnapshot } from "@/lib/teamAffiliationService";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -63,6 +64,7 @@ export async function POST(req: NextRequest) {
     const specialSupportByShift = await loadSpecialSupportQueuesForDate(
       previous.date
     );
+    const teamAffiliation = await loadTeamAffiliationSnapshot(previous.date);
 
     if (change && change.type) {
       const result = previewLiveAssignmentChange({
@@ -95,6 +97,7 @@ export async function POST(req: NextRequest) {
           regularCaddyPool: pool,
           events,
           specialSupportByShift,
+          teamAffiliation,
         });
 
     return NextResponse.json({ mode: "reflow", persisted: false, ...result });

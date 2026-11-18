@@ -11,13 +11,19 @@
  *        3부 찾근(SPECIAL_CALL)은 remaining 큐에서 2·3 다음·HOUSE 앞.
  *        마샬/당번/일반 FIXED 핀은 assignFixedPriority 최우선 유지.
  *        thirdBandSubgroup=WEEKEND는 평일(비공휴일) 3부 어디에든 넣지 않음
- *        thirdBandSubgroup=WEEKDAY는 평일에도 일반 3부반 순번(9~12조 회전).
+ *        thirdBandSubgroup=WEEKDAY는 평일에도 일반 3부반 순번(운영 THIRD 조 회전).
  *        주말/공휴일 WEEKDAY도 regular THIRD. 전용 WEEKDAY band 없음.
  * - DRIVING은 일반 HOUSE/THIRD 순번에 섞지 않음
  * - 8단계: 일반 예약 캔슬/추가 시 regular reflow (special 보호, 스페어·3부 재계산)
  */
 
-import { PRIMARY_TEAMS, isThirdBandTeam } from "@/lib/caddyManage";
+import { PRIMARY_TEAMS } from "@/lib/caddyManage";
+import {
+  DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  isInactiveTeamCaddy,
+  resolveAssignCaddyType,
+  type TeamAffiliationSnapshot,
+} from "@/lib/teamAffiliation";
 import { isWeekendBandPriorityDate } from "@/lib/krHolidays";
 import {
   COURSE_CODES,
@@ -387,6 +393,8 @@ export type AutoAssignResultV1 = {
     thirdStartTeam: string;
     /** 기준점(2026-08-17=12조)으로 계산한 자동 시작조 */
     thirdStartTeamAutomatic: string;
+    /** 이 배치에 사용한 조 소속 스냅샷. reflow/과거 날짜 해석용 */
+    teamAffiliation?: TeamAffiliationSnapshot;
   };
   /** 1·3부/1막 1부 위치 정책. live reflow가 이 값을 따른다. */
   specialPlacement?: SpecialPlacementState;
@@ -698,20 +706,41 @@ function withoutDrivingCaddies(caddies: AutoAssignCaddy[]): AutoAssignCaddy[] {
 }
 
 /**
- * 오늘 1부 첫 캐디 후보: 1~8조 HOUSE만.
- * 9~12조는 caddyType이 HOUSE여도 제외.
+ * 오늘 1부 첫 캐디 후보: 운영 중인 HOUSE 소속만.
+ * 조 번호가 아니라 날짜별 조 설정 스냅샷을 따른다.
  */
-export function isHouseStartCandidate(c: {
-  team?: string | null;
-  caddyType?: string | null;
-}): boolean {
-  if (isThirdBandTeam(String(c.team ?? ""))) return false;
-  const t = String(c.caddyType || "HOUSE").trim().toUpperCase();
-  return t === "HOUSE" || t === "";
+export function isHouseStartCandidate(
+  c: {
+    team?: string | null;
+    caddyType?: string | null;
+  },
+  snapshot?: TeamAffiliationSnapshot | null
+): boolean {
+  if (isInactiveTeamCaddy({ ...c, snapshot })) return false;
+  return resolveAssignCaddyType({ ...c, snapshot }) === "HOUSE";
+}
+
+function classifyAssignPool(
+  c: AutoAssignCaddy,
+  snapshot?: TeamAffiliationSnapshot | null
+): "house" | "third" | "driving" | "inactive" {
+  const t = resolveAssignCaddyType({
+    team: c.team,
+    caddyType: c.caddyType,
+    snapshot,
+  });
+  if (t === "DRIVING") return "driving";
+  if (isInactiveTeamCaddy({ team: c.team, caddyType: c.caddyType, snapshot })) {
+    return "inactive";
+  }
+  return t === "THIRD" ? "third" : "house";
 }
 
 /** 일반 순번용 타입별 풀 분리 (정렬 포함). DRIVING은 조와 무관하게 HOUSE/THIRD에 섞지 않음. */
-export function splitCaddyPools(caddies: AutoAssignCaddy[]): {
+export function splitCaddyPools(
+  caddies: AutoAssignCaddy[],
+  snapshot?: TeamAffiliationSnapshot | null
+): {
   house: AutoAssignCaddy[];
   third: AutoAssignCaddy[];
   driving: AutoAssignCaddy[];
@@ -720,17 +749,10 @@ export function splitCaddyPools(caddies: AutoAssignCaddy[]): {
   const third: AutoAssignCaddy[] = [];
   const driving: AutoAssignCaddy[] = [];
   for (const c of dedupeCaddies(caddies || [])) {
-    const t = normalizeAssignCaddyType(c.caddyType);
-    if (t === "DRIVING") {
-      driving.push(c);
-      continue;
-    }
-    // 9~12조는 caddyType과 무관하게 HOUSE 순환에 넣지 않음
-    if (isThirdBandTeam(c.team) || t === "THIRD") {
-      third.push(c);
-      continue;
-    }
-    house.push(c);
+    const bucket = classifyAssignPool(c, snapshot);
+    if (bucket === "driving") driving.push(c);
+    else if (bucket === "third") third.push(c);
+    else if (bucket === "house") house.push(c);
   }
   house.sort(compareCaddyOrder);
   third.sort(compareCaddyOrder);
@@ -739,7 +761,10 @@ export function splitCaddyPools(caddies: AutoAssignCaddy[]): {
 }
 
 /** Same partition as splitCaddyPools, but keep the caller’s relative order. */
-function splitCaddyPoolsPreservingOrder(caddies: AutoAssignCaddy[]): {
+function splitCaddyPoolsPreservingOrder(
+  caddies: AutoAssignCaddy[],
+  snapshot?: TeamAffiliationSnapshot | null
+): {
   house: AutoAssignCaddy[];
   third: AutoAssignCaddy[];
   driving: AutoAssignCaddy[];
@@ -748,16 +773,10 @@ function splitCaddyPoolsPreservingOrder(caddies: AutoAssignCaddy[]): {
   const third: AutoAssignCaddy[] = [];
   const driving: AutoAssignCaddy[] = [];
   for (const c of dedupeCaddies(caddies || [])) {
-    const t = normalizeAssignCaddyType(c.caddyType);
-    if (t === "DRIVING") {
-      driving.push(c);
-      continue;
-    }
-    if (isThirdBandTeam(c.team) || t === "THIRD") {
-      third.push(c);
-      continue;
-    }
-    house.push(c);
+    const bucket = classifyAssignPool(c, snapshot);
+    if (bucket === "driving") driving.push(c);
+    else if (bucket === "third") third.push(c);
+    else if (bucket === "house") house.push(c);
   }
   return { house, third, driving };
 }
@@ -848,7 +867,8 @@ function isDrivingCaddyType(value: unknown): boolean {
 
 function assertThirdStartCaddy(
   startCaddyId: number,
-  known: readonly AutoAssignCaddy[]
+  known: readonly AutoAssignCaddy[],
+  snapshot?: TeamAffiliationSnapshot | null
 ): AutoAssignCaddy {
   const found = known.find((caddy) => caddy.id === startCaddyId);
   if (!found) {
@@ -856,9 +876,14 @@ function assertThirdStartCaddy(
       `선택한 3부 첫 캐디(id=${startCaddyId})를 찾을 수 없습니다.`
     );
   }
-  if (!isThirdBandTeam(found.team) || isDrivingCaddyType(found.caddyType)) {
+  const type = resolveAssignCaddyType({
+    team: found.team,
+    caddyType: found.caddyType,
+    snapshot,
+  });
+  if (type !== "THIRD" || isInactiveTeamCaddy({ ...found, snapshot })) {
     throw new ThirdStartCaddyError(
-      `선택한 3부 첫 캐디(id=${startCaddyId})는 9~12조 THIRD가 아닙니다.`
+      `선택한 3부 첫 캐디(id=${startCaddyId})는 운영 중인 THIRD 조가 아닙니다.`
     );
   }
   return found;
@@ -2815,6 +2840,8 @@ export function assignRegularSequence(input: {
   thirdStartTeam?: string | null;
   /** 오늘 3부 regular 첫 캐디. 미입력 시 시작조 첫 가용. 풀에 없으면 다음 가용 */
   thirdStartCaddyId?: number | null;
+  /** 날짜별 조 소속 스냅샷. 없으면 1~8 HOUSE / 9~12 THIRD */
+  teamAffiliation?: TeamAffiliationSnapshot | null;
   /** 9~12조 위치 조회용 (비가용·주말반 제외자 포함). 없으면 third+house로 검증 */
   thirdRoster?: AutoAssignCaddy[] | null;
   /**
@@ -2874,6 +2901,8 @@ export function assignRegularSequence(input: {
     input.specialSupportByShift,
     input.oneTwoSupport
   );
+  const snapshot =
+    input.teamAffiliation ?? DEFAULT_TEAM_AFFILIATION_SNAPSHOT;
   const pools =
     input.house != null
       ? {
@@ -2881,7 +2910,7 @@ export function assignRegularSequence(input: {
           third: withoutDrivingCaddies(dedupeCaddies([...(input.third || [])])),
           driving: [] as AutoAssignCaddy[],
         }
-      : splitCaddyPools(input.available || []);
+      : splitCaddyPools(input.available || [], snapshot);
   pools.house = pools.house.filter((caddy) => !supportIds.has(caddy.id));
   pools.third = pools.third.filter((caddy) => !supportIds.has(caddy.id));
 
@@ -2889,8 +2918,16 @@ export function assignRegularSequence(input: {
     input.houseStartCaddyId != null && input.houseStartCaddyId !== undefined
       ? rotateHouseQueueFromStart(pools.house, Number(input.houseStartCaddyId))
       : pools.house;
-  const thirdStartTeam = resolveThirdStartTeam(input.thirdStartTeam, input.date);
-  let third = rotateThirdQueueFromStartTeam(pools.third, thirdStartTeam);
+  const thirdStartTeam = resolveThirdStartTeam(
+    input.thirdStartTeam,
+    input.date,
+    snapshot
+  );
+  let third = rotateThirdQueueFromStartTeam(
+    pools.third,
+    thirdStartTeam,
+    snapshot
+  );
   const weekendSeparated = extractWeekendBandInRotationOrder(third);
   const weekendIds = new Set(weekendSeparated.map((c) => c.id));
   const weekendPriority = isWeekendBandPriorityDate(input.date);
@@ -2910,12 +2947,13 @@ export function assignRegularSequence(input: {
       ...pools.house,
       ...pools.driving,
     ]);
-    assertThirdStartCaddy(thirdStartCaddyId, roster);
+    assertThirdStartCaddy(thirdStartCaddyId, roster, snapshot);
     third = rotateThirdQueueFromStartCaddy(
       third,
       thirdStartCaddyId,
       roster,
-      thirdStartTeam
+      thirdStartTeam,
+      snapshot
     );
   }
   const houseIndexById = new Map(house.map((c, i) => [c.id, i]));
@@ -2981,7 +3019,7 @@ export function assignRegularSequence(input: {
       usedInShift.add(row.caddy.id);
       // Cursor follows regular HOUSE consume only. 1막/1·2/1·3/54홀/fixed
       // are non-consumers even if they are seeded on a frozen shift.
-      if (row.kind === "regular" && isHouseRegularCaddy(row.caddy)) {
+      if (row.kind === "regular" && isHouseRegularCaddy(row.caddy, snapshot)) {
         houseAssigned += 1;
       }
       byShift[shift].assigned += 1;
@@ -3464,11 +3502,15 @@ export function computeAutoAssignmentsV1(input: {
     caddyId?: number;
     employmentStatus?: string | null;
   }> | null;
+  /** 날짜별 조 소속. 없으면 1~8 HOUSE / 9~12 THIRD */
+  teamAffiliation?: TeamAffiliationSnapshot | null;
 }): AutoAssignResultV1 {
   const date = input.date;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     throw new Error("date must be YYYY-MM-DD");
   }
+  const teamAffiliation =
+    input.teamAffiliation ?? DEFAULT_TEAM_AFFILIATION_SNAPSHOT;
 
   const openCourses = normalizeOpenCourses(input.openCourses);
   const unassignedReservations: UnassignedReservationRow[] = [];
@@ -3708,16 +3750,20 @@ export function computeAutoAssignmentsV1(input: {
   )
     .filter((caddy) => !specialSupportIds.has(caddy.id))
     .sort(compareCaddyOrder);
-  const originalHouse = splitCaddyPools(availableAll).house;
+  const originalHouse = splitCaddyPools(availableAll, teamAffiliation).house;
   const available = availableAll.filter((c) => !specialExclude.has(c.id));
-  const pools = splitCaddyPools(available);
+  const pools = splitCaddyPools(available, teamAffiliation);
   const regularHouse = resolveRegularHouseQueue({
     originalHouse,
     remainingHouse: pools.house,
     specialExcludeIds: specialExclude,
     houseStartCaddyId: input.houseStartCaddyId,
   });
-  const thirdStartTeam = resolveThirdStartTeam(input.thirdStartTeam, date);
+  const thirdStartTeam = resolveThirdStartTeam(
+    input.thirdStartTeam,
+    date,
+    teamAffiliation
+  );
   const thirdStartTeamAutomatic = automaticThirdStartTeam(date);
 
   const originalShift1 = eligible
@@ -3773,6 +3819,7 @@ export function computeAutoAssignmentsV1(input: {
     houseStartCaddyId: regularHouse.houseStartCaddyId,
     thirdStartTeam,
     thirdStartCaddyId: input.thirdStartCaddyId,
+    teamAffiliation,
     thirdRoster: caddyDirectory,
     oneThreeForThird: slotted.oneThreePlaced,
     twoThreeForThird: slotted.twoThreePlaced,
@@ -3975,6 +4022,7 @@ export function computeAutoAssignmentsV1(input: {
         : {}),
       thirdStartTeam,
       thirdStartTeamAutomatic,
+      teamAffiliation,
     },
     specialPlacement: slotted.specialPlacement,
   };
@@ -5553,7 +5601,8 @@ function freezeShiftsWithoutRemovedCaddies(
  */
 function circularHouseFromBoardAndCanonical(
   previous: AutoAssignResultV1,
-  pool: AutoAssignCaddy[]
+  pool: AutoAssignCaddy[],
+  snapshot?: TeamAffiliationSnapshot | null
 ): AutoAssignCaddy[] {
   const allow = new Map(pool.map((caddy) => [caddy.id, caddy]));
   const ordered: AutoAssignCaddy[] = [];
@@ -5568,7 +5617,7 @@ function circularHouseFromBoardAndCanonical(
       (row) =>
         row.shift === "1부" &&
         row.kind === "regular" &&
-        isHouseRegularCaddy(row.caddy)
+        isHouseRegularCaddy(row.caddy, snapshot)
     )
     .sort((a, b) => a.sequenceIndex - b.sequenceIndex);
   for (const row of rows) push(row.caddy);
@@ -5579,7 +5628,7 @@ function circularHouseFromBoardAndCanonical(
   }
   const onBoard = new Set<number>();
   for (const row of previous.assignments) {
-    if (row.kind === "regular" && isHouseRegularCaddy(row.caddy)) {
+    if (row.kind === "regular" && isHouseRegularCaddy(row.caddy, snapshot)) {
       onBoard.add(row.caddy.id);
     }
   }
@@ -5587,14 +5636,16 @@ function circularHouseFromBoardAndCanonical(
     if (row.spare1?.caddyId) onBoard.add(row.spare1.caddyId);
     if (row.spare2?.caddyId) onBoard.add(row.spare2.caddyId);
   }
-  for (const caddy of splitCaddyPools(pool).house) {
+  for (const caddy of splitCaddyPools(pool, snapshot).house) {
     if (onBoard.has(caddy.id)) push(caddy);
   }
-  const unusedHouse = (previous.unusedCaddies || []).filter(isHouseRegularCaddy);
+  const unusedHouse = (previous.unusedCaddies || []).filter((caddy) =>
+    isHouseRegularCaddy(caddy, snapshot)
+  );
   const unusedIds = new Set(unusedHouse.map((caddy) => caddy.id));
   // Pool HOUSE that are on neither the board nor unused snapshot exist
   // only because recoverComputePool merged roster/SoT extras.
-  const poolHasRecoverExtras = splitCaddyPools(pool).house.some(
+  const poolHasRecoverExtras = splitCaddyPools(pool, snapshot).house.some(
     (caddy) => !onBoard.has(caddy.id) && !unusedIds.has(caddy.id)
   );
   if (!poolHasRecoverExtras) {
@@ -5614,9 +5665,15 @@ function emptyRegularSequenceResult(): ReturnType<typeof assignRegularSequence> 
   };
 }
 
-function isHouseRegularCaddy(caddy: AutoAssignCaddy): boolean {
-  if (isThirdBandTeam(caddy.team)) return false;
-  return normalizeAssignCaddyType(caddy.caddyType) === "HOUSE";
+function isHouseRegularCaddy(
+  caddy: AutoAssignCaddy,
+  snapshot?: TeamAffiliationSnapshot | null
+): boolean {
+  const snap =
+    snapshot && typeof snapshot === "object" && "rows" in snapshot
+      ? snapshot
+      : undefined;
+  return classifyAssignPool(caddy, snap) === "house";
 }
 
 /**
@@ -5629,11 +5686,12 @@ function thirdHouseLeftoverQueue(input: {
   assignments: AutoAssignmentRow[];
   sparesByShift: SpareByShift[];
   excludeIds?: Iterable<number>;
+  snapshot?: TeamAffiliationSnapshot | null;
 }): AutoAssignCaddy[] {
   const excluded = new Set(input.excludeIds || []);
   const known = new Set<number>();
   for (const row of input.assignments) {
-    if (isHouseRegularCaddy(row.caddy)) known.add(row.caddy.id);
+    if (isHouseRegularCaddy(row.caddy, input.snapshot)) known.add(row.caddy.id);
   }
   for (const spare of input.sparesByShift) {
     if (spare.spare1?.caddyId) known.add(spare.spare1.caddyId);
@@ -5646,7 +5704,11 @@ function thirdHouseLeftoverQueue(input: {
   const workedShift1 = new Set<number>();
   const workedShift2 = new Set<number>();
   for (const row of input.assignments) {
-    if (!houseIds.has(row.caddy.id) || !isHouseRegularCaddy(row.caddy)) continue;
+    if (
+      !houseIds.has(row.caddy.id) ||
+      !isHouseRegularCaddy(row.caddy, input.snapshot)
+    )
+      continue;
     if (row.shift === "1부") workedShift1.add(row.caddy.id);
     else if (row.shift === "2부") workedShift2.add(row.caddy.id);
   }
@@ -5696,6 +5758,7 @@ function refillFrozenThirdHouseLeftover(input: {
   assignments: AutoAssignmentRow[];
   sparesByShift: SpareByShift[];
   excludeIds?: Iterable<number>;
+  snapshot?: TeamAffiliationSnapshot | null;
 }): {
   assignments: AutoAssignmentRow[];
   sparesByShift: SpareByShift[];
@@ -5705,7 +5768,7 @@ function refillFrozenThirdHouseLeftover(input: {
       (row) =>
         row.shift === "3부" &&
         row.kind === "regular" &&
-        isHouseRegularCaddy(row.caddy)
+        isHouseRegularCaddy(row.caddy, input.snapshot)
     )
     .sort((a, b) => a.sequenceIndex - b.sequenceIndex);
   if (houseSlots.length === 0) {
@@ -5721,7 +5784,7 @@ function refillFrozenThirdHouseLeftover(input: {
           row.shift === "3부" &&
           !(
             row.kind === "regular" &&
-            isHouseRegularCaddy(row.caddy)
+            isHouseRegularCaddy(row.caddy, input.snapshot)
           )
       )
       .map((row) => row.caddy.id)
@@ -5731,6 +5794,7 @@ function refillFrozenThirdHouseLeftover(input: {
     assignments: input.assignments,
     sparesByShift: input.sparesByShift,
     excludeIds: input.excludeIds,
+    snapshot: input.snapshot,
   }).filter((caddy) => !keepIds.has(caddy.id));
   const nextByKey = new Map<string, AutoAssignCaddy>();
   const used = new Set(keepIds);
@@ -5747,7 +5811,7 @@ function refillFrozenThirdHouseLeftover(input: {
     if (
       row.shift !== "3부" ||
       row.kind !== "regular" ||
-      !isHouseRegularCaddy(row.caddy)
+      !isHouseRegularCaddy(row.caddy, input.snapshot)
     ) {
       return row;
     }
@@ -5807,6 +5871,7 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
   chageunForThird?: AutoAssignCaddy[];
   specialSupportByShift: Record<ShiftPart, AutoAssignCaddy[]>;
   occupiedAssignments: AutoAssignmentRow[];
+  teamAffiliation?: TeamAffiliationSnapshot | null;
 }): ReturnType<typeof assignRegularSequence> {
   const freezeSet = new Set(input.freezeShifts);
   const combined = emptyRegularSequenceResult();
@@ -5846,6 +5911,7 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
       occupiedAssignments: input.occupiedAssignments.filter(
         (row) => row.shift === "1부" || row.shift === "2부"
       ),
+      teamAffiliation: input.teamAffiliation,
     });
     combined.assignments = [
       ...combined.assignments.filter(
@@ -5885,6 +5951,7 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
       assignments: combined.assignments,
       sparesByShift: combined.sparesByShift,
       excludeIds,
+      snapshot: input.teamAffiliation,
     });
     combined.assignments = refilled.assignments;
     combined.sparesByShift = refilled.sparesByShift;
@@ -5917,6 +5984,7 @@ function assignRemoveOnlyKeepingShiftOrder(input: {
       occupiedAssignments: input.occupiedAssignments.filter(
         (row) => row.shift === "3부"
       ),
+      teamAffiliation: input.teamAffiliation,
     });
     combined.assignments = [
       ...combined.assignments.filter((row) => row.shift !== "3부"),
@@ -6039,9 +6107,14 @@ export function reflowRegularAssignments(input: {
   specialPlacement?: SpecialPlacementState | null;
   /** 서버에서 다시 읽은 특수지원 큐. caddyPool에 넣지 않는다. */
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
+  teamAffiliation?: TeamAffiliationSnapshot | null;
 }): RegularReflowResult {
   let previous = input.previous;
   const date = previous.date;
+  const teamAffiliation =
+    input.teamAffiliation ??
+    previous.meta.teamAffiliation ??
+    DEFAULT_TEAM_AFFILIATION_SNAPSHOT;
   let events = input.events || [];
   const warnings: ReflowWarning[] = [];
   const fullPool = dedupeCaddies([...(input.regularCaddyPool || [])]);
@@ -6506,9 +6579,10 @@ export function reflowRegularAssignments(input: {
   // SICK removeOnly: 1부 보드 순서 + leftover. Do not team-sort the
   // whole queue and do not rebuild 2부 from its (possibly reset) board.
   const pool = [...remainingSource].sort(compareCaddyOrder);
-  const pools = splitCaddyPools(pool);
+  const pools = splitCaddyPools(pool, teamAffiliation);
   const originalHouse = splitCaddyPools(
-    [...originalSource].sort(compareCaddyOrder)
+    [...originalSource].sort(compareCaddyOrder),
+    teamAffiliation
   ).house;
 
   const reasonCode = resolveReflowReason({
@@ -6523,8 +6597,15 @@ export function reflowRegularAssignments(input: {
   const startId = previous.meta.houseStartCaddyId;
   let houseStartCaddyId: number | null;
   if (removeOnly) {
-    pools.house = circularHouseFromBoardAndCanonical(previous, remainingSource);
-    pools.third = splitCaddyPoolsPreservingOrder(remainingSource).third;
+    pools.house = circularHouseFromBoardAndCanonical(
+      previous,
+      remainingSource,
+      teamAffiliation
+    );
+    pools.third = splitCaddyPoolsPreservingOrder(
+      remainingSource,
+      teamAffiliation
+    ).third;
     houseStartCaddyId = null;
   } else {
     const resolvedHouse = resolveHouseQueueKeepingOrigin({
@@ -6605,6 +6686,7 @@ export function reflowRegularAssignments(input: {
           previous.specialSupportByShift ||
           emptySpecialSupportByShift(),
         occupiedAssignments: [...lockedRows, ...autoShift1Specials],
+        teamAffiliation,
       })
     : assignRegularSequence({
         date,
@@ -6629,6 +6711,7 @@ export function reflowRegularAssignments(input: {
           previous.specialSupportByShift ||
           emptySpecialSupportByShift(),
         occupiedAssignments: [...lockedRows, ...autoShift1Specials],
+        teamAffiliation,
       });
 
   const regularAssignments = regular.assignments.map((row) =>

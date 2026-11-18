@@ -240,7 +240,7 @@ console.log("== page wiring ==");
   assert(
     /소속\/조 변경/.test(page) &&
       /기존 ID\/계정은 유지/.test(page) &&
-      /caddyType: isThirdBandTeam\(draft\.team\) \? 'THIRD' : 'HOUSE'/.test(page),
+      /caddyType: resolveCaddyTypeFromTeam\(draft\.team, teamAffiliation\)/.test(page),
     "affiliation move reuses PATCH, keeps id"
   );
   assert(

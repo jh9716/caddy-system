@@ -7,6 +7,7 @@ import {
   computeAvailability,
   parseYmd,
 } from "@/lib/availabilityEngine";
+import { loadTeamAffiliationSnapshot } from "@/lib/teamAffiliationService";
 import {
   buildTeamSlotGrid,
   type TeamSlotGrid,
@@ -134,6 +135,7 @@ export async function loadAvailabilityForDate(
     }),
   ]);
 
+  const teamAffiliation = await loadTeamAffiliationSnapshot(ymd);
   const availability = computeAvailability({
     date: ymd,
     caddies: caddies.map((c) => ({
@@ -148,6 +150,7 @@ export async function loadAvailabilityForDate(
     })),
     assignments,
     extraTags,
+    teamAffiliation,
   });
 
   let offNames: string[] = [];

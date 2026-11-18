@@ -30,6 +30,8 @@ import {
 } from "@/lib/caddySlot";
 import { withCaddySlotMutation } from "@/lib/caddySlotLock";
 import { requireAdmin, resolveAuthUser } from "@/lib/auth";
+import { todayYmd } from "@/lib/dailyBoardPublished";
+import { loadTeamAffiliationSnapshot } from "@/lib/teamAffiliationService";
 import {
   canReadArchivedCaddies,
   caddyManageListWhere,
@@ -137,6 +139,7 @@ export async function POST(req: NextRequest) {
 
     const team = String(data.team ?? "").trim();
     const teamOrder = normalizeTeamOrder(data.teamOrder);
+    const teamAffiliation = await loadTeamAffiliationSnapshot(todayYmd());
     if (teamOrder < 1) {
       return NextResponse.json(
         { error: "빈 슬롯(teamOrder)을 선택해주세요.", code: "slot_required" },
@@ -151,6 +154,7 @@ export async function POST(req: NextRequest) {
         ? data.thirdBandSubgroup
         : undefined,
       current: null,
+      snapshot: teamAffiliation,
     });
 
     const created = await withCaddySlotMutation(prisma, async (tx) => {
@@ -189,7 +193,7 @@ export async function POST(req: NextRequest) {
           phoneNormalized,
           vehicleNumber,
           thirdBandSubgroup,
-          caddyType: resolveCaddyTypeFromTeam(team),
+          caddyType: resolveCaddyTypeFromTeam(team, teamAffiliation),
           ...(data.employeeCode !== undefined
             ? { employeeCode: data.employeeCode }
             : {}),

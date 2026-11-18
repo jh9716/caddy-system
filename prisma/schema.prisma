@@ -1221,6 +1221,35 @@ model FreeBoardPost {
   @@index([authorUserId])
 }
 
+/// 조별 HOUSE/THIRD 소속·운영 상태. 적용일 버전.
+/// Caddy.caddyType 을 일괄 갱신하지 않는다. 확정 배치표도 수정하지 않는다.
+/// DRIVING 은 Caddy.caddyType 전용. 이 테이블 affiliation 은 HOUSE/THIRD 만.
+model TeamAffiliationVersion {
+  id              Int      @id @default(autoincrement())
+  /// 이 날짜(로컬 00:00)부터 유효. 같은 날짜는 1개만.
+  effectiveFrom   DateTime @unique
+  note            String?
+  createdAt       DateTime @default(now())
+  createdByUserId Int?
+  items           TeamAffiliationItem[]
+
+  @@index([effectiveFrom])
+}
+
+model TeamAffiliationItem {
+  id           Int                     @id @default(autoincrement())
+  versionId    Int
+  version      TeamAffiliationVersion  @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  /// "1조" … "12조"
+  team         String
+  affiliation  CaddyType
+  /// true=운영, false=미운영. 개별 캐디 재직/휴직/퇴사와 별개.
+  operational  Boolean                 @default(true)
+
+  @@unique([versionId, team])
+  @@index([team])
+}
+
 /// 자유게시판 사진. Bytes는 private object storage (free-board/ prefix). 게시글당 최대 9장 (서버 검증).
 model FreeBoardPhoto {
   id         Int           @id @default(autoincrement())

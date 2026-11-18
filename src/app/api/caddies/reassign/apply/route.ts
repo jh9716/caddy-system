@@ -5,6 +5,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin, resolveAuthUser } from "@/lib/auth";
+import { todayYmd } from "@/lib/dailyBoardPublished";
+import { loadTeamAffiliationSnapshot } from "@/lib/teamAffiliationService";
 import { CaddyReassignError } from "@/lib/caddyReassign";
 import {
   applyCaddyReassign,
@@ -36,11 +38,13 @@ export async function POST(req: NextRequest) {
       );
     }
     const auth = await resolveAuthUser(req);
+    const teamAffiliation = await loadTeamAffiliationSnapshot(todayYmd());
     const result = await applyCaddyReassign({
       db: prisma,
       placements: request.placements,
       mode: request.mode,
       base: request.base,
+      teamAffiliation,
       actor: {
         username: auth?.username ?? null,
         userId: auth?.userId ?? null,

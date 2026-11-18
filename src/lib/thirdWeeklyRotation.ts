@@ -1,10 +1,17 @@
 /**
- * 3부반(9~12조) 주간 시작조 순환.
+ * 3부반 주간 시작조 순환.
  * teamOrder 필드는 수정하지 않고, 그날 THIRD queue 정렬에만 사용.
+ * 조 번호가 아니라 날짜별 조 설정 스냅샷의 운영 THIRD 조를 사용한다.
  */
 
 import { THIRD_BAND_TEAMS, type ThirdBandTeam } from "@/lib/caddyManage";
 import { addDays, weekdaySun0 } from "@/lib/krHolidays";
+import {
+  DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  isThirdAffiliatedTeam,
+  thirdTeamsInSnapshot,
+  type TeamAffiliationSnapshot,
+} from "@/lib/teamAffiliation";
 
 export type ThirdQueueCaddy = {
   id: number;
@@ -28,8 +35,23 @@ export const THIRD_WEEKLY_CYCLE: readonly ThirdBandTeam[] = [
   "11조",
 ];
 
-export function isThirdWeeklyTeam(value: unknown): value is ThirdBandTeam {
-  return (THIRD_BAND_TEAMS as readonly string[]).includes(String(value ?? "").trim());
+export function isThirdWeeklyTeam(
+  value: unknown,
+  snapshot?: TeamAffiliationSnapshot | null
+): boolean {
+  const team = String(value ?? "").trim();
+  if (snapshot) return isThirdAffiliatedTeam(team, snapshot);
+  return (THIRD_BAND_TEAMS as readonly string[]).includes(team);
+}
+
+export function thirdRotationTeams(
+  snapshot?: TeamAffiliationSnapshot | null
+): string[] {
+  const teams = thirdTeamsInSnapshot(snapshot ?? DEFAULT_TEAM_AFFILIATION_SNAPSHOT);
+  if (teams.length === 0) return [...THIRD_BAND_TEAMS];
+  const cycle = THIRD_WEEKLY_CYCLE.filter((team) => teams.includes(team));
+  const extra = teams.filter((team) => !cycle.includes(team as ThirdBandTeam));
+  return cycle.length > 0 ? [...cycle, ...extra] : teams;
 }
 
 export function mondayOfWeek(ymd: string): string {
@@ -58,44 +80,82 @@ export function automaticThirdStartTeam(ymd: string): ThirdBandTeam {
   return THIRD_WEEKLY_CYCLE[idx];
 }
 
+function firstOperationalThirdInCycle(
+  preferred: string,
+  snapshot?: TeamAffiliationSnapshot | null
+): string {
+  const teams = thirdTeamsInSnapshot(snapshot ?? DEFAULT_TEAM_AFFILIATION_SNAPSHOT);
+  if (teams.includes(preferred as (typeof teams)[number])) return preferred;
+  const start = THIRD_WEEKLY_CYCLE.indexOf(preferred as ThirdBandTeam);
+  const cycle =
+    start >= 0
+      ? [
+          ...THIRD_WEEKLY_CYCLE.slice(start),
+          ...THIRD_WEEKLY_CYCLE.slice(0, start),
+        ]
+      : [...THIRD_WEEKLY_CYCLE];
+  for (const team of cycle) {
+    if (teams.includes(team)) return team;
+  }
+  return teams[0] ?? preferred;
+}
+
 /** override는 그 주 월요일과 일치할 때만 적용. 이후 주차는 자동값. */
 export function effectiveThirdStartTeam(
   ymd: string,
-  override?: { weekStart: string; startTeam: string } | null
+  override?: { weekStart: string; startTeam: string } | null,
+  snapshot?: TeamAffiliationSnapshot | null
 ): ThirdBandTeam {
   const monday = mondayOfWeek(ymd);
   if (
     override &&
     override.weekStart === monday &&
-    isThirdWeeklyTeam(override.startTeam)
+    isThirdWeeklyTeam(override.startTeam, snapshot)
   ) {
-    return override.startTeam;
+    return firstOperationalThirdInCycle(
+      override.startTeam,
+      snapshot
+    ) as ThirdBandTeam;
   }
-  return automaticThirdStartTeam(ymd);
+  return firstOperationalThirdInCycle(
+    automaticThirdStartTeam(ymd),
+    snapshot
+  ) as ThirdBandTeam;
 }
 
 export function resolveThirdStartTeam(
   raw: unknown,
-  ymd: string
+  ymd: string,
+  snapshot?: TeamAffiliationSnapshot | null
 ): ThirdBandTeam {
   const value = String(raw ?? "").trim();
-  if (isThirdWeeklyTeam(value)) return value;
-  return automaticThirdStartTeam(ymd);
+  if (isThirdWeeklyTeam(value, snapshot)) {
+    return firstOperationalThirdInCycle(value, snapshot) as ThirdBandTeam;
+  }
+  return firstOperationalThirdInCycle(
+    automaticThirdStartTeam(ymd),
+    snapshot
+  ) as ThirdBandTeam;
 }
 
-/** 시작조 기준 9~12조 순환: 12스타트 → 12,9,10,11 */
+/** 시작조 기준 운영 THIRD 순환. 기본 9~12면 12스타트 → 12,9,10,11 */
 export function rotateThirdTeamsFromStart(
-  startTeam: ThirdBandTeam
-): ThirdBandTeam[] {
-  const all = [...THIRD_BAND_TEAMS];
-  const i = all.indexOf(startTeam);
+  startTeam: ThirdBandTeam | string,
+  snapshot?: TeamAffiliationSnapshot | null
+): string[] {
+  const all = thirdRotationTeams(snapshot);
+  const i = all.indexOf(String(startTeam ?? "").trim());
   if (i < 0) return all;
   return [...all.slice(i), ...all.slice(0, i)];
 }
 
-function teamCycleRank(team: string, startTeam: ThirdBandTeam): number {
-  const order = rotateThirdTeamsFromStart(startTeam);
-  const idx = order.indexOf(String(team ?? "").trim() as ThirdBandTeam);
+function teamCycleRank(
+  team: string,
+  startTeam: ThirdBandTeam | string,
+  snapshot?: TeamAffiliationSnapshot | null
+): number {
+  const order = rotateThirdTeamsFromStart(startTeam, snapshot);
+  const idx = order.indexOf(String(team ?? "").trim());
   return idx >= 0 ? idx : 1000;
 }
 
@@ -114,16 +174,19 @@ function compareFallbackCaddy(
  */
 export function rotateThirdQueueFromStartTeam<T extends ThirdQueueCaddy>(
   third: readonly T[],
-  startTeam: ThirdBandTeam
+  startTeam: ThirdBandTeam | string,
+  snapshot?: TeamAffiliationSnapshot | null
 ): T[] {
   const band: T[] = [];
   const rest: T[] = [];
   for (const caddy of third) {
-    if (isThirdWeeklyTeam(caddy.team)) band.push(caddy);
+    if (isThirdWeeklyTeam(caddy.team, snapshot)) band.push(caddy);
     else rest.push(caddy);
   }
   band.sort((a, b) => {
-    const tr = teamCycleRank(a.team, startTeam) - teamCycleRank(b.team, startTeam);
+    const tr =
+      teamCycleRank(a.team, startTeam, snapshot) -
+      teamCycleRank(b.team, startTeam, snapshot);
     if (tr !== 0) return tr;
     if (a.teamOrder !== b.teamOrder) return a.teamOrder - b.teamOrder;
     return a.id - b.id;
@@ -141,13 +204,19 @@ export function rotateThirdQueueFromStartCaddy<T extends ThirdQueueCaddy>(
   availableThird: readonly T[],
   startCaddyId: number,
   roster: readonly T[],
-  startTeam: ThirdBandTeam
+  startTeam: ThirdBandTeam | string,
+  snapshot?: TeamAffiliationSnapshot | null
 ): T[] {
-  const available = rotateThirdQueueFromStartTeam(availableThird, startTeam);
+  const available = rotateThirdQueueFromStartTeam(
+    availableThird,
+    startTeam,
+    snapshot
+  );
   if (available.length === 0) return [];
   const canonical = rotateThirdQueueFromStartTeam(
-    roster.filter((caddy) => isThirdWeeklyTeam(caddy.team)),
-    startTeam
+    roster.filter((caddy) => isThirdWeeklyTeam(caddy.team, snapshot)),
+    startTeam,
+    snapshot
   );
   const availableIds = new Set(available.map((caddy) => caddy.id));
   let idx = canonical.findIndex((caddy) => caddy.id === startCaddyId);

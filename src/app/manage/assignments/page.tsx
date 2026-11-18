@@ -169,8 +169,13 @@ import type {
   OpsSpecialSupportItem,
 } from "@/lib/opsStatusPanelView";
 import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
-import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
+import {
+  DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  isThirdAffiliatedTeam,
+  thirdTeamsInSnapshot,
+  type TeamAffiliationSnapshot,
+} from "@/lib/teamAffiliation";
 import {
   LIVE_CHANGE_LABELS,
   QUICK_ACTION_CONFIRM_MESSAGE,
@@ -758,6 +763,8 @@ export default function ManageAssignmentsOpsPage() {
   const [thirdWeekly, setThirdWeekly] = useState<ThirdWeeklyStartState | null>(
     null
   );
+  const [teamAffiliation, setTeamAffiliation] =
+    useState<TeamAffiliationSnapshot>(DEFAULT_TEAM_AFFILIATION_SNAPSHOT);
   const [savingThirdWeekly, setSavingThirdWeekly] = useState(false);
   const [loadingAvail, setLoadingAvail] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
@@ -1284,6 +1291,16 @@ export default function ManageAssignmentsOpsPage() {
     setDraftSaveState("idle");
     (async () => {
       try {
+        fetch(
+          `/api/team-affiliations?date=${encodeURIComponent(date)}`,
+          { credentials: "include", cache: "no-store" }
+        )
+          .then((r) => r.json().catch(() => ({})))
+          .then((aff) => {
+            if (cancelled || gen !== loadGen.current) return;
+            if (aff?.snapshot) setTeamAffiliation(aff.snapshot);
+          })
+          .catch(() => {});
         const res = await fetch(
           `/api/assignments/date-bundle?date=${encodeURIComponent(date)}`,
           { credentials: "include", cache: "no-store" }
@@ -1630,7 +1647,7 @@ export default function ManageAssignmentsOpsPage() {
     return rows
       .filter(
         (r) =>
-          isHouseStartCandidate(r) &&
+          isHouseStartCandidate(r, teamAffiliation) &&
           isAssignableEmploymentStatus(
             "employmentStatus" in r ? r.employmentStatus : undefined
           )
@@ -1642,7 +1659,7 @@ export default function ManageAssignmentsOpsPage() {
           (Number(a.teamOrder) || 0) - (Number(b.teamOrder) || 0) ||
           a.id - b.id
       );
-  }, [availability, draft]);
+  }, [availability, draft, teamAffiliation]);
 
   /** 오늘 3부 첫 캐디 후보: 9~12조 (가용+특수+당일 제외 ACTIVE). RETIRED/LEAVE 제외. 주간 시작조 회전순 */
   const thirdStartCandidates = useMemo(() => {
@@ -1654,18 +1671,23 @@ export default function ManageAssignmentsOpsPage() {
     ];
     const byId = new Map<number, AvailabilityRow>();
     for (const row of rows) {
-      if (!isThirdBandTeam(row.team)) continue;
+      if (!isThirdAffiliatedTeam(row.team, teamAffiliation)) continue;
       if (String(row.caddyType || "").toUpperCase() === "DRIVING") continue;
       if (isInactiveEmploymentAvailability(row)) continue;
       if (!byId.has(row.id)) byId.set(row.id, row);
     }
-    const startTeam = THIRD_BAND_TEAMS.includes(
-      (thirdWeekly?.startTeam || "") as (typeof THIRD_BAND_TEAMS)[number]
+    const thirdTeams = thirdTeamsInSnapshot(teamAffiliation);
+    const startTeam = thirdTeams.includes(
+      (thirdWeekly?.startTeam || "") as (typeof thirdTeams)[number]
     )
-      ? (thirdWeekly!.startTeam as (typeof THIRD_BAND_TEAMS)[number])
-      : "12조";
-    return rotateThirdQueueFromStartTeam([...byId.values()], startTeam);
-  }, [availability, thirdWeekly]);
+      ? thirdWeekly!.startTeam
+      : thirdTeams[0] || "12조";
+    return rotateThirdQueueFromStartTeam(
+      [...byId.values()],
+      startTeam,
+      teamAffiliation
+    );
+  }, [availability, thirdWeekly, teamAffiliation]);
 
   function thirdStartCandidateStatus(row: AvailabilityRow): string {
     if (row.excludedReasons && row.excludedReasons.length > 0) {
@@ -4373,7 +4395,7 @@ export default function ManageAssignmentsOpsPage() {
                 <option value="">
                   {!date ? "날짜를 선택하세요" : "불러오는 중…"}
                 </option>
-                {THIRD_BAND_TEAMS.map((team) => (
+                {thirdTeamsInSnapshot(teamAffiliation).map((team) => (
                   <option key={team} value={team}>
                     {team}
                   </option>
