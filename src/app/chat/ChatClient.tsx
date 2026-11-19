@@ -100,10 +100,12 @@ import type { ChatPhotoDirectProgress, ChatPhotoDirectResult } from "@/lib/chatP
 import { readCapacitorNativePlatform } from "@/lib/nativePlatformClient";
 import {
   chatEntryNow,
+  enableChatEntryTimingFromSearch,
   mergeLateNotifyPrefs,
   recordChatEntryTiming,
   schedulePrewarmShown,
 } from "@/lib/chatEntryTiming";
+import { shouldPaintCachedRoomsNow } from "@/lib/chatEntrySpeed";
 import {
   addChatPrewarmWaiter,
   armChatPrewarmTimeout,
@@ -128,9 +130,11 @@ import {
   invalidateChatToken,
   placeholderChatRoomSummary,
   readCachedChatRooms,
+  readLastOpenedChatRoom,
   readReusableChatToken,
   rememberChatRooms,
   rememberChatToken,
+  rememberLastOpenedChatRoom,
 } from "@/lib/chatFastEntry";
 import {
   canProfileMention,
@@ -241,6 +245,7 @@ import {
   fetchChatWsReuseRuntimeEnabled,
   isParkExpired,
   parkedResumeClientGate,
+  shouldAwaitParkRuntimeCheck,
   shouldParkChatWsReuse,
   CHAT_WS_RESUME_TIMEOUT_MS,
   CHAT_WS_REUSE_RUNTIME_POLL_MS,
@@ -491,7 +496,13 @@ export default function ChatClient() {
       if (diagOn) noteChatWsReuseDiagParkSkip("compile_off");
       return false;
     }
-    const runtimeEnabled = await refreshWsReuseRuntime();
+    const cachedRuntime = wsReuseRuntimeRef.current;
+    const runtimeEnabled = shouldAwaitParkRuntimeCheck(cachedRuntime)
+      ? await refreshWsReuseRuntime()
+      : cachedRuntime;
+    if (!shouldAwaitParkRuntimeCheck(cachedRuntime)) {
+      void refreshWsReuseRuntime();
+    }
     if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) {
       if (diagOn) noteChatWsReuseDiagParkSkip("socket_not_open");
       return false;
@@ -1507,11 +1518,46 @@ export default function ChatClient() {
   connectDirectoryRef.current = connectDirectory;
   connectSocketRef.current = connectSocket;
 
+  useLayoutEffect(() => {
+    try {
+      enableChatEntryTimingFromSearch(window.location.search);
+    } catch {
+      // timing only
+    }
+    if (entryTimingRef.current.mountAt == null) entryTimingRef.current.mountAt = chatEntryNow();
+    if (entryTimingRef.current.roomsReqAt == null) {
+      entryTimingRef.current.roomsReqAt = entryTimingRef.current.mountAt;
+    }
+    const last = readLastOpenedChatRoom();
+    if (last) lastOpenedRoomIdRef.current = last;
+    const cachedToken = readReusableChatToken<TokenPayload>();
+    if (!cachedToken || isChatSessionEnded()) return;
+    const cachedRooms = readCachedChatRooms<RoomSummary>(cachedToken.user.userId) || [];
+    if (
+      !shouldPaintCachedRoomsNow({
+        sessionEnded: isChatSessionEnded(),
+        hasCachedToken: true,
+        cachedRoomCount: cachedRooms.length,
+      })
+    ) {
+      tokenRef.current = cachedToken;
+      setTokenInfo(cachedToken);
+      usedCachedTokenRef.current = true;
+      return;
+    }
+    usedCachedTokenRef.current = true;
+    tokenRef.current = cachedToken;
+    setTokenInfo(cachedToken);
+    applyRooms(cachedRooms);
+    warmChatPhotoMediaConnection();
+  }, [applyRooms]);
+
   useEffect(() => {
     let cancelled = false;
     const unsubscribeReset = subscribeChatSessionReset((reason) => {
       handleChatWsReuseDiagSessionReset();
       lastOpenedRoomIdRef.current = null;
+      rememberLastOpenedChatRoom(null);
       dropChatPrewarm({ close: false });
       clearLocalLines([]);
       dropParkedRoomSocket();
@@ -1547,12 +1593,12 @@ export default function ChatClient() {
         if (room) void connectSocket(info, room.roomId);
       });
     });
-    roomsShownRef.current = false;
+    if (initAttempt !== 0) roomsShownRef.current = false;
     setInitFailed(false);
     {
       const t = entryTimingRef.current;
-      t.mountAt = chatEntryNow();
-      t.roomsReqAt = null;
+      if (t.mountAt == null) t.mountAt = chatEntryNow();
+      if (t.roomsReqAt == null) t.roomsReqAt = t.mountAt;
       try {
         const nav = performance.getEntriesByType?.("navigation")?.[0] as PerformanceNavigationTiming | undefined;
         t.fullLoadEntry = initAttempt === 0 && Boolean(nav && new URL(nav.name).pathname === "/chat");
@@ -1578,13 +1624,14 @@ export default function ChatClient() {
         tokenRef.current = info;
         setTokenInfo(info);
         warmChatPhotoMediaConnection();
-        warmChatPhotoMediaConnection();
         const requested =
           parseChatDeepLinkRoomId(new URLSearchParams(window.location.search).get("room")) ||
           readPendingChatRoomId(sessionStorage);
-        entryTimingRef.current.roomsReqAt = chatEntryNow();
+        if (entryTimingRef.current.roomsReqAt == null) entryTimingRef.current.roomsReqAt = chatEntryNow();
         const cachedRooms = readCachedChatRooms<RoomSummary>(info.user.userId);
         if (cachedRooms) applyRooms(cachedRooms); // 같은 세션 목록 즉시 표시, 아래에서 재검증
+        const lastOpened = readLastOpenedChatRoom();
+        if (lastOpened && !lastOpenedRoomIdRef.current) lastOpenedRoomIdRef.current = lastOpened;
         connectDirectory(info);
         if (requested) {
           void fetchTargetedRoom(info.token, requested);
@@ -2151,6 +2198,7 @@ export default function ChatClient() {
     setActiveRoom(room);
     setView("room");
     lastOpenedRoomIdRef.current = room.roomId;
+    rememberLastOpenedChatRoom(room.roomId);
     const keepPrewarmLines = shouldPaintPrewarmLines({ ready: adoptReady || pre.ready });
     if (keepPrewarmLines) {
       setLines(linesRef.current);
