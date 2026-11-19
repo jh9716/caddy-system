@@ -34,7 +34,61 @@ export const NOTICE_PUSH_DONE_LABEL = "푸시 발송 완료";
 export const NOTICE_CREATE_SEND_PUSH_LABEL = "등록과 동시에 푸시 알림 보내기";
 export const NOTICE_EDIT_SEND_PUSH_LABEL = "수정 내용 푸시 알림 보내기";
 export const NOTICE_SCHEDULED_PUSH_HINT =
-  "예약 게시 공지는 현재 게시 시각 자동 푸시를 지원하지 않으며 게시 후 수동 발송할 수 있습니다.";
+  "예약 게시 공지는 현재 게시 시각 자동 푸시를 지원하지 않으며 게시 시작 이후 상세에서 수동 발송할 수 있습니다.";
+
+export const NOTICE_PUBLISH_MODES = ["always", "today", "range", "scheduled"] as const;
+export type NoticePublishMode = (typeof NOTICE_PUBLISH_MODES)[number];
+
+export const NOTICE_PUBLISH_MODE_LABELS: Record<NoticePublishMode, string> = {
+  always: "계속 게시",
+  today: "오늘만",
+  range: "기간 지정",
+  scheduled: "예약 게시",
+};
+
+export const NOTICE_PUBLISH_MODE_HINTS: Record<NoticePublishMode, string> = {
+  always: "기한 없이 계속 보입니다.",
+  today: "오늘 하루만 보입니다. 내일 0시부터 숨겨집니다.",
+  range: "시작일과 종료일을 고릅니다. 종료일은 그날 끝까지입니다.",
+  scheduled: "지정한 시작 시각부터 보입니다. 종료일은 비워도 됩니다.",
+};
+
+export const NOTICE_PUBLISH_STATUSES = ["live", "scheduled", "ended"] as const;
+export type NoticePublishStatus = (typeof NOTICE_PUBLISH_STATUSES)[number];
+
+export const NOTICE_PUBLISH_STATUS_LABELS: Record<NoticePublishStatus, string> = {
+  live: "게시 중",
+  scheduled: "예약",
+  ended: "종료",
+};
+
+export const NOTICE_PUBLISH_FILTERS = ["all", "live", "scheduled", "ended"] as const;
+export type NoticePublishFilter = (typeof NOTICE_PUBLISH_FILTERS)[number];
+
+export const NOTICE_PUBLISH_FILTER_LABELS: Record<NoticePublishFilter, string> = {
+  all: "전체",
+  live: "게시 중",
+  scheduled: "예약",
+  ended: "종료",
+};
+
+export const NOTICE_PUBLISH_QUICK_RANGES = ["today", "3d", "7d", "month"] as const;
+export type NoticePublishQuickRange = (typeof NOTICE_PUBLISH_QUICK_RANGES)[number];
+
+export const NOTICE_PUBLISH_QUICK_RANGE_LABELS: Record<NoticePublishQuickRange, string> = {
+  today: "오늘",
+  "3d": "3일",
+  "7d": "7일",
+  month: "이번 달",
+};
+
+export const NOTICE_PUBLISH_CLEAR_LABEL = "날짜 지우기";
+export const NOTICE_PUBLISH_ALWAYS_PERIOD_LABEL = "기한 없음";
+export const NOTICE_PUBLISH_END_EXCLUSIVE_HINT =
+  "종료일 하루가 끝날 때까지 보입니다. 다음날 0시부터 숨겨집니다.";
+export const NOTICE_PUBLISH_CUSTOM_TIME_LABEL = "시각 직접 지정";
+export const NOTICE_PUBLISH_INVALID_WINDOW_MESSAGE =
+  "게시 시작 시각이 종료 시각과 같거나 더 늦을 수 없습니다. 종료를 더 뒤로 지정해 주세요.";
 
 export const NOTICE_PUSH_CONCURRENCY = 12;
 export const NOTICE_PUSH_AUDIT_ACTION = "NOTICE_PUSH_SEND";
