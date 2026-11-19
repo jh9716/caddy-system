@@ -230,6 +230,10 @@ console.log("== readonly inspect allowlist includes push subscription ==");
     "guard allowlists comment replies inspect"
   );
   assert(
+    guardSrc.includes("inspect-team-affiliation-prod-readonly"),
+    "guard allowlists team affiliation inspect"
+  );
+  assert(
     guardSrc.includes("inspect-device-push-token-prod-readonly"),
     "guard allowlists device push token inspect"
   );
@@ -332,6 +336,43 @@ console.log("== readonly inspect allowlist includes push subscription ==");
   assert(!commentRepliesDeploy.includes('["migrate", "dev"]'), "replies deploy no migrate dev call");
   assert(!commentRepliesDeploy.includes('["migrate", "reset"]'), "replies deploy no migrate reset call");
   assert(!commentRepliesDeploy.includes('["db", "push"]'), "replies deploy no db push call");
+  const teamAffMig = fs.readFileSync(
+    path.resolve("prisma/migrations/20261117233000_team_affiliation_settings/migration.sql"),
+    "utf8"
+  );
+  assert(teamAffMig.includes('CREATE TABLE "TeamAffiliationVersion"'), "affiliation mig Version table");
+  assert(teamAffMig.includes('CREATE TABLE "TeamAffiliationItem"'), "affiliation mig Item table");
+  assert(!/\bDROP\s+(TABLE|COLUMN|INDEX|TYPE)\b/i.test(teamAffMig), "affiliation mig no DROP");
+  assert(!/(^|\n)\s*UPDATE\s+/i.test(teamAffMig), "affiliation mig no UPDATE");
+  assert(!/(^|\n)\s*INSERT\s+/i.test(teamAffMig), "affiliation mig no INSERT");
+  assert(!/(^|\n)\s*DELETE\s+FROM\b/i.test(teamAffMig), "affiliation mig no DELETE");
+  const teamAffDeploy = fs.readFileSync(
+    path.resolve("scripts/maintenance/deploy-team-affiliation-migration.ts"),
+    "utf8"
+  );
+  assert(
+    teamAffDeploy.includes("TEAM_AFFILIATION_SETTINGS_20261117"),
+    "affiliation deploy uses exact confirm task-id"
+  );
+  assert(teamAffDeploy.includes("gateSingleMigration"), "affiliation deploy uses pending gate");
+  assert(teamAffDeploy.includes("NEON_PITR_WINDOW_CONFIRMED"), "affiliation deploy requires PITR confirm");
+  assert(teamAffDeploy.includes('["migrate", "status"]'), "affiliation deploy inspects migrate status first");
+  assert(teamAffDeploy.includes('["migrate", "deploy"]'), "affiliation deploy uses migrate deploy");
+  assert(
+    teamAffDeploy.indexOf('["migrate", "status"]') < teamAffDeploy.indexOf('["migrate", "deploy"]'),
+    "affiliation deploy status before deploy"
+  );
+  assert(!teamAffDeploy.includes('["migrate", "dev"]'), "affiliation deploy no migrate dev call");
+  assert(!teamAffDeploy.includes('["migrate", "reset"]'), "affiliation deploy no migrate reset call");
+  assert(!teamAffDeploy.includes('["db", "push"]'), "affiliation deploy no db push call");
+  const teamAffInspect = fs.readFileSync(
+    path.resolve("scripts/inspect-team-affiliation-prod-readonly.ts"),
+    "utf8"
+  );
+  assert(
+    teamAffInspect.includes("write/migrate flags are not allowed"),
+    "affiliation inspect refuses write flags"
+  );
   const commentRepliesInspect = fs.readFileSync(
     path.resolve("scripts/inspect-comment-replies-prod-readonly.ts"),
     "utf8"

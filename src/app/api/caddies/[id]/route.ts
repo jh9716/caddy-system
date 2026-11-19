@@ -48,6 +48,8 @@ import {
 } from "@/lib/sessionRevocation";
 import { notifyChatSessionRevokedForCaddyLink } from "@/lib/chatSessionRevoke";
 import { writeCaddyDormitoryAudit } from "@/lib/caddyDormitory";
+import { todayYmd } from "@/lib/dailyBoardPublished";
+import { loadTeamAffiliationSnapshot } from "@/lib/teamAffiliationService";
 
 export const dynamic = "force-dynamic";
 
@@ -284,6 +286,7 @@ export async function PATCH(
       return NextResponse.json(updated);
     }
 
+    const teamAffiliation = await loadTeamAffiliationSnapshot(todayYmd());
     const nextTeam =
       data.team !== undefined ? data.team.trim() : current.team;
     const teamChanging =
@@ -357,10 +360,9 @@ export async function PATCH(
     if (data.dormitoryResident !== undefined) {
       updateData.dormitoryResident = data.dormitoryResident === true;
     }
-    // 조 기준 canonical invariant: 1~8 HOUSE, 9~12 THIRD (클라이언트 caddyType 무시)
-    updateData.caddyType = resolveCaddyTypeFromTeam(nextTeam);
+    // 조 소속 스냅샷 기준 canonical. 클라이언트 caddyType 무시. 다른 캐디 row는 변경하지 않음.
+    updateData.caddyType = resolveCaddyTypeFromTeam(nextTeam, teamAffiliation);
 
-    // 3부반 세부구분 invariant: 1~8조 → 항상 null, 9~12→1~8 이동 시 정리
     const subgroupRequested = Object.prototype.hasOwnProperty.call(
       body,
       "thirdBandSubgroup"
@@ -373,6 +375,7 @@ export async function PATCH(
       current:
         (current as { thirdBandSubgroup?: "WEEKDAY" | "WEEKEND" | null })
           .thirdBandSubgroup ?? null,
+      snapshot: teamAffiliation,
     });
 
     const nextEmployment =

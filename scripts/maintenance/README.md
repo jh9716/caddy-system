@@ -64,6 +64,32 @@ READ-ONLY inspect first (`_prisma_migrations` + `prisma migrate status`). `prism
 
 Preview verify (`scripts/preview-db/verify-readonly.sql`) prints `comment_total` and `comment_id_fingerprint` (ids only, no body). Compare those keys from precheck vs verify after migrate. After additive apply, `comment_parent_set` must be 0.
 
+Team affiliation settings (`TeamAffiliationVersion` / `TeamAffiliationItem`, additive, no seed). **Preview migrate first, separate approval.** App code already falls back when tables are missing. Production migrate does **not** write 2026-11-16 ops affiliation.
+
+READ-ONLY inspect (no confirm, no migrate):
+
+```
+PRODUCTION_DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+  npm run inspect:team-affiliation-readonly
+```
+
+Production apply (explicit ops approval only). This script does not create or restore Neon backups:
+
+```
+PROD_MAINTENANCE_CONFIRM=TEAM_AFFILIATION_SETTINGS_20261117 \
+NEON_PITR_WINDOW_CONFIRMED=YES \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+npx tsx scripts/maintenance/deploy-team-affiliation-migration.ts
+```
+
+`prisma migrate deploy` only when `gateSingleMigration` says the sole pending migration is `20261117233000_team_affiliation_settings`. Host must be `ep-crimson-cell-a1i1tpce.ap-southeast-1.aws.neon.tech` / `neondb` (Preview `lucky-mode-29989630` / `ep-odd-voice` rejected). Gate + local SQL checksum are re-read immediately before deploy. After apply: User/Caddy/DailyBoardPublished fingerprints unchanged, two new tables + indexes + FK present, affiliation rows empty, `_prisma_migrations` checksum matches local file. No db push / migrate reset / seed / Caddy UPDATE. Re-running after ops save affiliation rows HOLDs on the already-applied empty-table check; use inspect-readonly instead.
+
+Neon backup / recovery (console, not this script):
+
+1. Open Neon project `morning-tooth-60659454` (not Preview `lucky-mode-29989630`).
+2. Confirm history retention / PITR window covers the migrate time. Set `NEON_PITR_WINDOW_CONFIRMED=YES` only after that console check.
+3. If rollback is needed: Restore to a timestamp **before** migrate, onto a new branch, verify fingerprints, then cut over. Do not `prisma migrate resolve` to fake success.
+
 ChatAttachment Photo V1 production schema:
 
 ```

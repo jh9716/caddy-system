@@ -1107,7 +1107,7 @@ section("3부 첫 캐디 thirdStartCaddyId");
   } catch (e) {
     assert(
       e instanceof ThirdStartCaddyError &&
-        /9~12조/.test((e as Error).message),
+        /THIRD/.test((e as Error).message),
       "HOUSE ID → validation error"
     );
   }

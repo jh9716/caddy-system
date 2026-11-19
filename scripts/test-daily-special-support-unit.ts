@@ -1429,8 +1429,9 @@ section("source / UI / migration / 권한");
     "우측 패널은 지원근무 기존 GET 결과를 재사용"
   );
   assert(
-    /isThirdBandTeam, THIRD_BAND_TEAMS/.test(page),
-    "THIRD_BAND_TEAMS import 유지"
+    /thirdTeamsInSnapshot\(teamAffiliation\)/.test(page) &&
+      /rotateThirdQueueFromStartTeam\(/.test(page),
+    "3부 후보가 조 설정 스냅샷을 사용"
   );
   assert(/requireAdmin/.test(route), "API requireAdmin");
   assert(/includeCandidates/.test(route), "후보 목록은 includeCandidates일 때만");

@@ -14,6 +14,7 @@ import { resolveCanonicalLivePool } from "@/lib/opsDutyLivePool";
 import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
 import { isOffSheetUnresolvedError } from "@/lib/caddyPoolCanonicalService";
 import { OFF_SHEET_UNRESOLVED_CODE } from "@/lib/caddyPoolCanonical";
+import { loadTeamAffiliationSnapshot } from "@/lib/teamAffiliationService";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -62,7 +63,7 @@ export async function POST(req: NextRequest) {
 
     const tPool = Date.now();
     const tSupport = Date.now();
-    const [poolResult, supportResult] = await Promise.all([
+    const [poolResult, supportResult, teamAffiliation] = await Promise.all([
       resolveCanonicalLivePool(previous.date, regularCaddyPool).then(
         (resolved) => {
           previous.unavailableCaddyIds = resolved.unavailableIds;
@@ -73,6 +74,7 @@ export async function POST(req: NextRequest) {
         specialSupportByShift,
         ms: Date.now() - tSupport,
       })),
+      loadTeamAffiliationSnapshot(previous.date),
     ]);
 
     const result = await applyLiveAssignmentChange(
@@ -83,6 +85,7 @@ export async function POST(req: NextRequest) {
         change,
         changeType,
         specialSupportByShift: supportResult.specialSupportByShift,
+        teamAffiliation,
       },
       { ip, updateOpsIfPresent: true }
     );

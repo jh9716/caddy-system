@@ -20,6 +20,7 @@ import {
   type TeamCaddyType,
   type ThirdBandSubgroup,
 } from "@/lib/caddyManage";
+import type { TeamAffiliationSnapshot } from "@/lib/teamAffiliation";
 import {
   findSlotHoldingConflicts,
   findSlotOccupant,
@@ -251,13 +252,17 @@ function sameUpdatedAt(
   return serializeReassignUpdatedAt(current) === serializeReassignUpdatedAt(expected);
 }
 
-function applyTypeInvariant(row: MutableRow): void {
+function applyTypeInvariant(
+  row: MutableRow,
+  snapshot?: TeamAffiliationSnapshot | null
+): void {
   if (!isPrimaryTeam(row.team)) return;
-  row.caddyType = resolveCaddyTypeFromTeam(row.team);
+  row.caddyType = resolveCaddyTypeFromTeam(row.team, snapshot);
   row.thirdBandSubgroup = resolveThirdBandSubgroup({
     team: row.team,
     requested: undefined,
     current: row.thirdBandSubgroup,
+    snapshot,
   });
 }
 
@@ -295,7 +300,8 @@ function holdersInTeam(rows: MutableRow[], team: string, excludeId: number) {
  */
 function applyInsertPlacement(
   rows: MutableRow[],
-  placement: ReassignPlacement
+  placement: ReassignPlacement,
+  snapshot?: TeamAffiliationSnapshot | null
 ): void {
   const mover = rows.find((row) => row.id === placement.id);
   if (!mover) return;
@@ -322,7 +328,7 @@ function applyInsertPlacement(
         }
       }
       mover.teamOrder = toOrder;
-      applyTypeInvariant(mover);
+      applyTypeInvariant(mover, snapshot);
       return;
     }
     if (occupied && fromOrder < 1) {
@@ -331,7 +337,7 @@ function applyInsertPlacement(
       }
     }
     mover.teamOrder = toOrder;
-    applyTypeInvariant(mover);
+    applyTypeInvariant(mover, snapshot);
     return;
   }
 
@@ -342,12 +348,13 @@ function applyInsertPlacement(
   }
   mover.team = toTeam;
   mover.teamOrder = toOrder;
-  applyTypeInvariant(mover);
+  applyTypeInvariant(mover, snapshot);
 }
 
 function applyExplicitPlacement(
   rows: MutableRow[],
-  placement: ReassignPlacement
+  placement: ReassignPlacement,
+  snapshot?: TeamAffiliationSnapshot | null
 ): void {
   const mover = rows.find((row) => row.id === placement.id);
   if (!mover) return;
@@ -356,7 +363,7 @@ function applyExplicitPlacement(
   }
   mover.team = placement.team;
   mover.teamOrder = placement.teamOrder;
-  applyTypeInvariant(mover);
+  applyTypeInvariant(mover, snapshot);
 }
 
 function collectExistingAnomalies(
@@ -488,9 +495,13 @@ function buildBaseFromOriginals(
 export function planCaddyReassign(
   rows: ReassignCaddyRow[],
   placements: ReassignPlacement[],
-  options?: { mode?: ReassignMode }
+  options?: {
+    mode?: ReassignMode;
+    teamAffiliation?: TeamAffiliationSnapshot | null;
+  }
 ): ReassignPlan {
   const mode: ReassignMode = options?.mode === "insert" ? "insert" : "explicit";
+  const snapshot = options?.teamAffiliation ?? null;
   const issues: ReassignIssue[] = [];
   const requestedIds = placements.map((p) => p.id);
 
@@ -616,8 +627,8 @@ export function planCaddyReassign(
 
   if (requestIssueCount === 0) {
     for (const placement of placements) {
-      if (mode === "insert") applyInsertPlacement(working, placement);
-      else applyExplicitPlacement(working, placement);
+      if (mode === "insert") applyInsertPlacement(working, placement, snapshot);
+      else applyExplicitPlacement(working, placement, snapshot);
     }
     issues.push(...collectFinalIssues(originals, working, affectedTeams));
   }
@@ -647,7 +658,7 @@ export function planCaddyReassign(
         id: row.id,
         team: row.team,
         teamOrder: row.teamOrder,
-        caddyType: resolveCaddyTypeFromTeam(row.team),
+        caddyType: resolveCaddyTypeFromTeam(row.team, snapshot),
         thirdBandSubgroup: row.thirdBandSubgroup,
       });
     }

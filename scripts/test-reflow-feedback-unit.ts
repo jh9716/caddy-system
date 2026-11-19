@@ -9,6 +9,7 @@ import {
   RECALC_SUCCESS_MESSAGE,
   type AssignmentDraft,
 } from "../src/lib/assignmentDraft";
+import { houseTenThirdOffSnapshot } from "../src/lib/teamAffiliation";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -112,6 +113,42 @@ console.log("== resolveHouseStartCaddyIdForRecalc ==");
   assert(
     resolveHouseStartCaddyIdForRecalc({ selectedId: "", draft: null }) === null,
     "draft 없으면 null"
+  );
+  const nine = {
+    id: 90,
+    name: "구조",
+    team: "9조",
+    teamOrder: 1,
+    caddyType: "THIRD" as const,
+    employmentStatus: "ACTIVE" as const,
+  };
+  const nineRegular: AssignmentDraft["assignments"][number] = {
+    ...row(90, "regular", "1부", "07:08", "9조"),
+    caddy: nine,
+  };
+  const nineDraft = draft({
+    assignments: [nineRegular],
+    caddyPool: [nine],
+    teamAffiliation: houseTenThirdOffSnapshot("2026-11-16"),
+  });
+  const fromNine = resolveHouseStartCaddyIdForRecalc({
+    selectedId: "",
+    draft: nineDraft,
+  });
+  assert(
+    fromNine?.caddyId === 90 && fromNine.source === "draftRegular",
+    "9조 HOUSE 작업본 recalc가 stale THIRD 태그를 무시"
+  );
+  const withoutSnap = resolveHouseStartCaddyIdForRecalc({
+    selectedId: "",
+    draft: draft({
+      assignments: [nineRegular],
+      caddyPool: [nine],
+    }),
+  });
+  assert(
+    withoutSnap == null,
+    "스냅샷 없으면 9조 stale THIRD는 HOUSE 시작 후보가 아님"
   );
 }
 

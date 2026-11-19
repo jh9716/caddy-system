@@ -5,6 +5,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
+import { todayYmd } from "@/lib/dailyBoardPublished";
+import { loadTeamAffiliationSnapshot } from "@/lib/teamAffiliationService";
 import { CaddyReassignError } from "@/lib/caddyReassign";
 import {
   parseCaddyReassignRequest,
@@ -32,7 +34,8 @@ export async function POST(req: NextRequest) {
         updatedAt: true,
       },
     });
-    const plan = previewCaddyReassign(rows, request);
+    const teamAffiliation = await loadTeamAffiliationSnapshot(todayYmd());
+    const plan = previewCaddyReassign(rows, request, teamAffiliation);
     return NextResponse.json({
       ok: plan.ok,
       mode: plan.mode,

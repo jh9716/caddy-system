@@ -5,6 +5,11 @@
  */
 
 import { PRIMARY_TEAMS, type ExtraFlagOption } from "@/lib/caddyManage";
+import {
+  isInactiveTeamCaddy,
+  resolveAssignCaddyType,
+  type TeamAffiliationSnapshot,
+} from "@/lib/teamAffiliation";
 
 export type CaddyTypeCode = "HOUSE" | "THIRD" | "DRIVING";
 export type EmploymentCode = "ACTIVE" | "LEAVE" | "RETIRED";
@@ -204,6 +209,7 @@ export function computeAvailability(input: {
   caddies: AvailabilityCaddyInput[];
   assignments?: AvailabilityAssignmentInput[];
   extraTags?: AvailabilityExtraTagInput[];
+  teamAffiliation?: TeamAffiliationSnapshot | null;
 }): AvailabilityResult {
   const { date } = input;
   const { start, end } = parseYmd(date);
@@ -239,7 +245,13 @@ export function computeAvailability(input: {
 
   for (const c of byId.values()) {
     const employment = String(c.employmentStatus ?? "").toUpperCase();
-    const caddyType = normalizeCaddyType(c.caddyType);
+    const caddyType = normalizeCaddyType(
+      resolveAssignCaddyType({
+        team: c.team,
+        caddyType: c.caddyType,
+        snapshot: input.teamAffiliation,
+      })
+    );
     const extraFlags = (c.extraFlags ?? []).filter(
       (f): f is ExtraFlagOption =>
         f === "주중반" || f === "주말반" || f === "드라이빙"
@@ -256,6 +268,15 @@ export function computeAvailability(input: {
     else if (employment === "LEAVE") reasons.push("휴직(LEAVE)");
     else if (employment !== "ACTIVE") {
       reasons.push(`재직상태 아님(${employment || "UNKNOWN"})`);
+    }
+    if (
+      isInactiveTeamCaddy({
+        team: c.team,
+        caddyType: c.caddyType,
+        snapshot: input.teamAffiliation,
+      })
+    ) {
+      reasons.push("미운영 조");
     }
 
     const blocking = dayAssignments.filter((a) => BLOCKING_SET.has(a.type));

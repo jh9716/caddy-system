@@ -169,8 +169,16 @@ import type {
   OpsSpecialSupportItem,
 } from "@/lib/opsStatusPanelView";
 import { SPECIAL_SETTINGS_STALE_MESSAGE } from "@/lib/dailySpecialDuty";
-import { isThirdBandTeam, THIRD_BAND_TEAMS } from "@/lib/caddyManage";
 import { rotateThirdQueueFromStartTeam } from "@/lib/thirdWeeklyRotation";
+import {
+  DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  TEAM_AFFILIATION_CHANGED_MESSAGE,
+  defaultTeamAffiliationSnapshot,
+  isThirdAffiliatedTeam,
+  sameTeamAffiliationRules,
+  thirdTeamsInSnapshot,
+  type TeamAffiliationSnapshot,
+} from "@/lib/teamAffiliation";
 import {
   LIVE_CHANGE_LABELS,
   QUICK_ACTION_CONFIRM_MESSAGE,
@@ -758,6 +766,8 @@ export default function ManageAssignmentsOpsPage() {
   const [thirdWeekly, setThirdWeekly] = useState<ThirdWeeklyStartState | null>(
     null
   );
+  const [teamAffiliation, setTeamAffiliation] =
+    useState<TeamAffiliationSnapshot>(DEFAULT_TEAM_AFFILIATION_SNAPSHOT);
   const [savingThirdWeekly, setSavingThirdWeekly] = useState(false);
   const [loadingAvail, setLoadingAvail] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
@@ -1273,6 +1283,7 @@ export default function ManageAssignmentsOpsPage() {
       setOpsDutySheetPreview(null);
       setThirdWeekly(null);
       setPublished(null);
+      setTeamAffiliation(DEFAULT_TEAM_AFFILIATION_SNAPSHOT);
       return;
     }
     const gen = ++loadGen.current;
@@ -1282,12 +1293,23 @@ export default function ManageAssignmentsOpsPage() {
     setDraft(null);
     setAutoResult(null);
     setDraftSaveState("idle");
+    setTeamAffiliation(defaultTeamAffiliationSnapshot(date));
     (async () => {
       try {
-        const res = await fetch(
-          `/api/assignments/date-bundle?date=${encodeURIComponent(date)}`,
-          { credentials: "include", cache: "no-store" }
-        );
+        const [affRes, res] = await Promise.all([
+          fetch(
+            `/api/team-affiliations?date=${encodeURIComponent(date)}`,
+            { credentials: "include", cache: "no-store" }
+          ),
+          fetch(
+            `/api/assignments/date-bundle?date=${encodeURIComponent(date)}`,
+            { credentials: "include", cache: "no-store" }
+          ),
+        ]);
+        const aff = (await affRes.json().catch(() => ({}))) as {
+          snapshot?: TeamAffiliationSnapshot;
+          error?: string;
+        };
         const data = (await res.json().catch(() => ({}))) as {
           ok?: boolean;
           date?: string;
@@ -1335,6 +1357,12 @@ export default function ManageAssignmentsOpsPage() {
           boardPreview?: BoardPushPreviewState | null;
           errors?: Record<string, { error?: string }>;
         };
+        if (cancelled || gen !== loadGen.current) return;
+        if (aff?.snapshot) {
+          setTeamAffiliation(aff.snapshot);
+        } else {
+          setTeamAffiliation(defaultTeamAffiliationSnapshot(date));
+        }
         if (
           !shouldApplyAssignmentsDateBundle({
             requestGen: gen,
@@ -1349,7 +1377,15 @@ export default function ManageAssignmentsOpsPage() {
         if (!res.ok) {
           throw new Error(data.error || "날짜 묶음 조회 실패");
         }
-        setDateLoadWarnings(dateBundleSectionWarnings(data.errors));
+        const loadWarnings = dateBundleSectionWarnings(data.errors);
+        if (!affRes.ok || !aff?.snapshot) {
+          loadWarnings.push(
+            aff?.error
+              ? `조 설정: ${aff.error}`
+              : "조 설정: 조회 실패 — 기본 1~8 HOUSE / 9~12 THIRD를 표시합니다."
+          );
+        }
+        setDateLoadWarnings(loadWarnings);
         setDateBundleReady(true);
         setSpecialDutyBundle(data.specialDuties ?? null);
         setSpecialDutyBundleError(data.errors?.specialDuties?.error ?? null);
@@ -1630,7 +1666,7 @@ export default function ManageAssignmentsOpsPage() {
     return rows
       .filter(
         (r) =>
-          isHouseStartCandidate(r) &&
+          isHouseStartCandidate(r, teamAffiliation) &&
           isAssignableEmploymentStatus(
             "employmentStatus" in r ? r.employmentStatus : undefined
           )
@@ -1642,7 +1678,7 @@ export default function ManageAssignmentsOpsPage() {
           (Number(a.teamOrder) || 0) - (Number(b.teamOrder) || 0) ||
           a.id - b.id
       );
-  }, [availability, draft]);
+  }, [availability, draft, teamAffiliation]);
 
   /** 오늘 3부 첫 캐디 후보: 9~12조 (가용+특수+당일 제외 ACTIVE). RETIRED/LEAVE 제외. 주간 시작조 회전순 */
   const thirdStartCandidates = useMemo(() => {
@@ -1654,18 +1690,23 @@ export default function ManageAssignmentsOpsPage() {
     ];
     const byId = new Map<number, AvailabilityRow>();
     for (const row of rows) {
-      if (!isThirdBandTeam(row.team)) continue;
+      if (!isThirdAffiliatedTeam(row.team, teamAffiliation)) continue;
       if (String(row.caddyType || "").toUpperCase() === "DRIVING") continue;
       if (isInactiveEmploymentAvailability(row)) continue;
       if (!byId.has(row.id)) byId.set(row.id, row);
     }
-    const startTeam = THIRD_BAND_TEAMS.includes(
-      (thirdWeekly?.startTeam || "") as (typeof THIRD_BAND_TEAMS)[number]
+    const thirdTeams = thirdTeamsInSnapshot(teamAffiliation);
+    const startTeam = thirdTeams.includes(
+      (thirdWeekly?.startTeam || "") as (typeof thirdTeams)[number]
     )
-      ? (thirdWeekly!.startTeam as (typeof THIRD_BAND_TEAMS)[number])
-      : "12조";
-    return rotateThirdQueueFromStartTeam([...byId.values()], startTeam);
-  }, [availability, thirdWeekly]);
+      ? thirdWeekly!.startTeam
+      : thirdTeams[0] || "12조";
+    return rotateThirdQueueFromStartTeam(
+      [...byId.values()],
+      startTeam,
+      teamAffiliation
+    );
+  }, [availability, thirdWeekly, teamAffiliation]);
 
   function thirdStartCandidateStatus(row: AvailabilityRow): string {
     if (row.excludedReasons && row.excludedReasons.length > 0) {
@@ -3892,6 +3933,7 @@ export default function ManageAssignmentsOpsPage() {
             : null,
         thirdStartTeam: thirdWeekly?.startTeam || null,
         specialSupportByShift,
+        teamAffiliation,
       };
     }
     return buildDailyStaffingSummary({
@@ -3913,6 +3955,7 @@ export default function ManageAssignmentsOpsPage() {
     specialSupportByShift,
     staffingAvailableCount,
     date,
+    teamAffiliation,
   ]);
 
   const operationalRoster = useMemo(
@@ -4314,6 +4357,12 @@ export default function ManageAssignmentsOpsPage() {
             ))}
           </div>
         ) : null}
+        {draft?.teamAffiliation &&
+        !sameTeamAffiliationRules(draft.teamAffiliation, teamAffiliation) ? (
+          <div className="ops-error" role="status">
+            {TEAM_AFFILIATION_CHANGED_MESSAGE}
+          </div>
+        ) : null}
         {autoResult?.specialPlacement?.block && (
           <div className="ops-error">
             {autoResult.specialPlacement.block.message}
@@ -4373,7 +4422,7 @@ export default function ManageAssignmentsOpsPage() {
                 <option value="">
                   {!date ? "날짜를 선택하세요" : "불러오는 중…"}
                 </option>
-                {THIRD_BAND_TEAMS.map((team) => (
+                {thirdTeamsInSnapshot(teamAffiliation).map((team) => (
                   <option key={team} value={team}>
                     {team}
                   </option>

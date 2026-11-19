@@ -12,6 +12,8 @@ import {
   isThirdWeeklyTeam,
   mondayOfWeek,
 } from "@/lib/thirdWeeklyRotation";
+import type { TeamAffiliationSnapshot } from "@/lib/teamAffiliation";
+import { loadTeamAffiliationSnapshot } from "@/lib/teamAffiliationService";
 
 export type ThirdWeeklyStartPayload = {
   date: string;
@@ -66,21 +68,28 @@ async function loadOverrideRow(
 }
 
 export async function resolveThirdWeeklyStart(
-  ymd: string
+  ymd: string,
+  snapshot?: TeamAffiliationSnapshot | null
 ): Promise<ThirdWeeklyStartPayload> {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
     throw new ThirdWeeklyStartError("date=YYYY-MM-DD 필요");
   }
+  const affiliation = snapshot ?? (await loadTeamAffiliationSnapshot(ymd));
   const weekStart = mondayOfWeek(ymd);
-  const autoStartTeam = automaticThirdStartTeam(ymd);
   const override = await loadOverrideRow(weekStart);
-  const startTeam = effectiveThirdStartTeam(ymd, override);
+  const startTeam = effectiveThirdStartTeam(
+    ymd,
+    override,
+    affiliation
+  ) as ThirdBandTeam;
   return {
     date: ymd,
     weekStart,
-    autoStartTeam,
+    autoStartTeam: automaticThirdStartTeam(ymd),
     startTeam,
-    overridden: Boolean(override && isThirdWeeklyTeam(override.startTeam)),
+    overridden: Boolean(
+      override && isThirdWeeklyTeam(override.startTeam, affiliation)
+    ),
   };
 }
 
@@ -88,9 +97,10 @@ export async function setThirdWeeklyStartOverride(
   ymd: string,
   startTeam: string
 ): Promise<ThirdWeeklyStartPayload> {
-  if (!isThirdWeeklyTeam(startTeam)) {
+  const affiliation = await loadTeamAffiliationSnapshot(ymd);
+  if (!isThirdWeeklyTeam(startTeam, affiliation)) {
     throw new ThirdWeeklyStartError(
-      "이번 주 3부반 시작조는 9/10/11/12조만 선택할 수 있습니다."
+      "이번 주 3부반 시작조는 운영 중인 THIRD 조만 선택할 수 있습니다."
     );
   }
   const weekStart = mondayOfWeek(ymd);
@@ -132,10 +142,11 @@ export async function clearThirdWeeklyStartOverride(
 
 /** 엔진 입력용: DB override 실패 시 자동값 */
 export async function loadEffectiveThirdStartTeam(
-  ymd: string
+  ymd: string,
+  snapshot?: TeamAffiliationSnapshot | null
 ): Promise<ThirdBandTeam> {
   try {
-    return (await resolveThirdWeeklyStart(ymd)).startTeam;
+    return (await resolveThirdWeeklyStart(ymd, snapshot)).startTeam;
   } catch {
     return automaticThirdStartTeam(ymd);
   }

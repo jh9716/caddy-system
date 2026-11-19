@@ -5,16 +5,16 @@ import {
   previewLiveAssignmentEvents,
   type LiveChangeInput,
 } from "@/lib/assignmentChange";
-import {
-  reflowRegularAssignments,
-  type AutoAssignCaddy,
-  type AutoAssignResultV1,
-  type ReservationChangeEvent,
+import type {
+  AutoAssignCaddy,
+  AutoAssignResultV1,
+  ReservationChangeEvent,
 } from "@/lib/autoAssignEngine";
 import { resolveCanonicalLivePool } from "@/lib/opsDutyLivePool";
 import { isOffSheetUnresolvedError } from "@/lib/caddyPoolCanonicalService";
 import { resolveDailySpecialPlacement } from "@/lib/dailySpecialDutyService";
 import { loadSpecialSupportQueuesForDate } from "@/lib/dailySpecialSupportService";
+import { loadTeamAffiliationSnapshot } from "@/lib/teamAffiliationService";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -63,6 +63,7 @@ export async function POST(req: NextRequest) {
     const specialSupportByShift = await loadSpecialSupportQueuesForDate(
       previous.date
     );
+    const teamAffiliation = await loadTeamAffiliationSnapshot(previous.date);
 
     if (change && change.type) {
       const result = previewLiveAssignmentChange({
@@ -70,6 +71,7 @@ export async function POST(req: NextRequest) {
         regularCaddyPool: pool,
         change,
         specialSupportByShift,
+        teamAffiliation,
       });
       return NextResponse.json({ mode: "reflow-preview", persisted: false, ...result });
     }
@@ -78,24 +80,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "events[] 또는 change 필요" }, { status: 400 });
     }
 
-    const result = events.some(
-      (e) =>
-        e.type === "REMOVE_CADDY" ||
-        e.type === "SWAP_CADDY" ||
-        (e.type === "CANCEL_RESERVATION" && e.cause)
-    )
-      ? previewLiveAssignmentEvents({
-          previous,
-          regularCaddyPool: pool,
-          events,
-          specialSupportByShift,
-        })
-      : reflowRegularAssignments({
-          previous,
-          regularCaddyPool: pool,
-          events,
-          specialSupportByShift,
-        });
+    const result = previewLiveAssignmentEvents({
+      previous,
+      regularCaddyPool: pool,
+      events,
+      specialSupportByShift,
+      teamAffiliation,
+    });
 
     return NextResponse.json({ mode: "reflow", persisted: false, ...result });
   } catch (e: unknown) {

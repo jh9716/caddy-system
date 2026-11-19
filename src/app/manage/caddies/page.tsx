@@ -26,24 +26,32 @@ import {
   EMPLOYMENT_STATUSES,
   EMPLOYMENT_STATUS_UI_LABELS,
   EDITABLE_EXTRA_FLAG_OPTIONS,
-  HOUSE_TEAMS,
   PRIMARY_TEAMS,
   THIRD_BAND_SUBGROUP_LABELS,
-  THIRD_BAND_TEAMS,
   countsTowardRosterHeadcount,
   employmentStatusUiLabel,
   isDrivingCaddyType,
   isPrimaryTeam,
   rosterHeadcount,
-  isHouseTeam,
-  isThirdBandTeam,
   normalizeEmploymentStatus,
+  resolveCaddyTypeFromTeam,
   thirdBandSubgroupCsvLabel,
   type AffiliationKind,
   type ExtraFlagOption,
   type EmploymentStatus,
   type ThirdBandSubgroup,
 } from '@/lib/caddyManage';
+import {
+  DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  houseTeamsInSnapshot,
+  inactiveTeamsInSnapshot,
+  isTeamOperational,
+  resolveTeamAffiliation,
+  teamsWithAffiliation,
+  thirdTeamsInSnapshot,
+  type TeamAffiliationKind,
+  type TeamAffiliationSnapshot,
+} from '@/lib/teamAffiliation';
 import { formatCaddyLabel } from '@/lib/caddyDisplay';
 import { formatKrMobileDisplay } from '@/lib/caddyPhone';
 import {
@@ -59,6 +67,7 @@ import {
   normalizeMobileRosterKey,
   ownedCartNumberByCaddyId,
   hasAssignedRosterSlot,
+  rosterBoardBandSpans,
   rosterSlotDisplay,
   rosterSubgroupLabel,
   type RosterDensity,
@@ -124,7 +133,7 @@ type Caddy = {
   memo?: string | null;
   employeeCode?: string | null;
   caddyType?: string | null;
-  /** 9~12조만. null=일반 3부반 */
+  /** THIRD 소속 조만. null=일반 3부반 */
   thirdBandSubgroup?: ThirdBandSubgroup | null;
   missingFromImport?: boolean;
   phoneNormalized?: string | null;
@@ -161,20 +170,23 @@ const emptyDraft = (): Draft => ({
   dormitoryResident: false,
 });
 
-function affiliationFromCaddy(c: {
-  caddyType?: string | null;
-  team?: string | null;
-}): AffiliationKind {
+function affiliationFromCaddy(
+  c: {
+    caddyType?: string | null;
+    team?: string | null;
+  },
+  snapshot?: TeamAffiliationSnapshot | null
+): AffiliationKind {
   if (isDrivingCaddyType(c.caddyType) || c.team === DRIVING_POOL_TEAM) {
     return 'DRIVING';
   }
-  if (isThirdBandTeam(String(c.team ?? ''))) return 'THIRD';
-  return 'HOUSE';
+  return resolveTeamAffiliation(String(c.team ?? ''), snapshot);
 }
 
 function applyAffiliationChange(
   current: Draft,
-  next: AffiliationKind
+  next: AffiliationKind,
+  snapshot?: TeamAffiliationSnapshot | null
 ): Partial<Draft> {
   if (next === 'DRIVING') {
     return {
@@ -185,29 +197,34 @@ function applyAffiliationChange(
     };
   }
   if (next === 'HOUSE') {
-    const keep = isHouseTeam(current.team);
+    const teams = teamsWithAffiliation('HOUSE', snapshot);
+    const keep = teams.includes(current.team as (typeof teams)[number]);
     return {
       affiliation: 'HOUSE',
-      team: keep ? current.team : '1조',
+      team: keep ? current.team : teams[0] || '1조',
       teamOrder: keep ? current.teamOrder : 0,
       thirdBandSubgroup: null,
     };
   }
-  const keep = isThirdBandTeam(current.team);
+  const teams = teamsWithAffiliation('THIRD', snapshot);
+  const keep = teams.includes(current.team as (typeof teams)[number]);
   return {
     affiliation: 'THIRD',
-    team: keep ? current.team : '9조',
+    team: keep ? current.team : teams[0] || '9조',
     teamOrder: keep ? current.teamOrder : 0,
     thirdBandSubgroup: keep ? current.thirdBandSubgroup : null,
   };
 }
 
-function toDraft(c: Caddy): Draft {
+function toDraft(
+  c: Caddy,
+  snapshot?: TeamAffiliationSnapshot | null
+): Draft {
   const subgroup =
     c.thirdBandSubgroup === 'WEEKDAY' || c.thirdBandSubgroup === 'WEEKEND'
       ? c.thirdBandSubgroup
       : null;
-  const affiliation = affiliationFromCaddy(c);
+  const affiliation = affiliationFromCaddy(c, snapshot);
   return {
     name: c.name,
     affiliation,
@@ -220,7 +237,10 @@ function toDraft(c: Caddy): Draft {
     phone: c.phoneNormalized ?? '',
     vehicleNumber: c.vehicleNumber ?? '',
     thirdBandSubgroup:
-      affiliation === 'THIRD' && isThirdBandTeam(c.team) ? subgroup : null,
+      affiliation === 'THIRD' &&
+      resolveTeamAffiliation(c.team, snapshot) === 'THIRD'
+        ? subgroup
+        : null,
     dormitoryResident: c.dormitoryResident === true,
   };
 }
@@ -244,16 +264,20 @@ function AffiliationTeamFields({
   emptySlots,
   slotLabel,
   onChange,
+  snapshot,
 }: {
   draft: Draft;
   original: Caddy;
   emptySlots: number[];
   slotLabel: string;
   onChange: (patch: Partial<Draft>) => void;
+  snapshot?: TeamAffiliationSnapshot | null;
 }) {
   const nextDriving = draft.affiliation === 'DRIVING';
+  const houseTeams = teamsWithAffiliation('HOUSE', snapshot);
+  const thirdTeams = teamsWithAffiliation('THIRD', snapshot);
   const teamOptions =
-    draft.affiliation === 'THIRD' ? THIRD_BAND_TEAMS : HOUSE_TEAMS;
+    draft.affiliation === 'THIRD' ? thirdTeams : houseTeams;
   return (
     <>
       <label>
@@ -263,12 +287,16 @@ function AffiliationTeamFields({
           onChange={(e) => {
             const next = e.target.value as AffiliationKind;
             if (next === 'HOUSE' || next === 'THIRD' || next === 'DRIVING') {
-              onChange(applyAffiliationChange(draft, next));
+              onChange(applyAffiliationChange(draft, next, snapshot));
             }
           }}
         >
-          <option value="HOUSE">HOUSE (1~8조)</option>
-          <option value="THIRD">3부반 (9~12조)</option>
+          {houseTeams.length > 0 || draft.affiliation === 'HOUSE' ? (
+            <option value="HOUSE">HOUSE</option>
+          ) : null}
+          {thirdTeams.length > 0 || draft.affiliation === 'THIRD' ? (
+            <option value="THIRD">3부반</option>
+          ) : null}
           <option value="DRIVING">드라이빙</option>
         </select>
       </label>
@@ -282,9 +310,10 @@ function AffiliationTeamFields({
               onChange({
                 team,
                 teamOrder: team === original.team ? draft.teamOrder : 0,
-                thirdBandSubgroup: isThirdBandTeam(team)
-                  ? draft.thirdBandSubgroup
-                  : null,
+                thirdBandSubgroup:
+                  resolveTeamAffiliation(team, snapshot) === 'THIRD'
+                    ? draft.thirdBandSubgroup
+                    : null,
               });
             }}
           >
@@ -294,6 +323,7 @@ function AffiliationTeamFields({
             {teamOptions.map((t) => (
               <option key={t} value={t}>
                 {t}
+                {isTeamOperational(t, snapshot) ? '' : ' · 미운영'}
               </option>
             ))}
           </select>
@@ -320,7 +350,8 @@ function AffiliationTeamFields({
           </select>
         </label>
       )}
-      {!nextDriving && isThirdBandTeam(draft.team) && (
+      {!nextDriving &&
+        resolveTeamAffiliation(draft.team, snapshot) === 'THIRD' && (
         <label>
           3부반 구분
           <select
@@ -425,6 +456,23 @@ export default function ManageCaddiesPage() {
   );
   /** PC 현장표 밀도. 기본 압축. 모바일 조 칩 레이아웃과는 무관 */
   const [density, setDensity] = useState<RosterDensity>('compact');
+  const [teamAffiliation, setTeamAffiliation] = useState<TeamAffiliationSnapshot>(
+    DEFAULT_TEAM_AFFILIATION_SNAPSHOT
+  );
+  const [teamAffiliationVersions, setTeamAffiliationVersions] = useState<
+    Array<{
+      id: number;
+      effectiveFrom: string;
+      note: string | null;
+      rows: TeamAffiliationSnapshot['rows'];
+    }>
+  >([]);
+  const [teamSettingsOpen, setTeamSettingsOpen] = useState(false);
+  const [teamSettingsSaving, setTeamSettingsSaving] = useState(false);
+  const [teamSettingsEffectiveFrom, setTeamSettingsEffectiveFrom] = useState('');
+  const [teamSettingsDraft, setTeamSettingsDraft] = useState(
+    DEFAULT_TEAM_AFFILIATION_SNAPSHOT.rows
+  );
   /** 현장표 배치 편집. 저장 전 DB 변경 없음 */
   const [placementEdit, setPlacementEdit] = useState(false);
   const [draftRows, setDraftRows] = useState<Caddy[]>([]);
@@ -683,6 +731,33 @@ export default function ManageCaddiesPage() {
   }, [load]);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/team-affiliations', {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !data?.snapshot) return;
+        setTeamAffiliation(data.snapshot);
+        setTeamAffiliationVersions(Array.isArray(data.versions) ? data.versions : []);
+        setTeamSettingsDraft(data.snapshot.rows);
+        setTeamSettingsEffectiveFrom(
+          data.snapshot.effectiveFrom || new Date().toISOString().slice(0, 10)
+        );
+      } catch {
+        if (!cancelled) {
+          setTeamAffiliation(DEFAULT_TEAM_AFFILIATION_SNAPSHOT);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (viewMode !== 'summary') return;
     void loadOwnedCarts();
   }, [viewMode, loadOwnedCarts]);
@@ -825,8 +900,9 @@ export default function ManageCaddiesPage() {
         rows: displayRows,
         query: q,
         drivingHeadcount: rosterCounts.drivingHeadcount,
+        teamAffiliation,
       }),
-    [displayRows, q, rosterCounts.drivingHeadcount]
+    [displayRows, q, rosterCounts.drivingHeadcount, teamAffiliation]
   );
 
   const mobileRosterRows = useMemo(
@@ -1155,7 +1231,7 @@ export default function ManageCaddiesPage() {
 
   function startEdit(c: Caddy) {
     setEditingId(c.id);
-    setDrafts((prev) => ({ ...prev, [c.id]: toDraft(c) }));
+    setDrafts((prev) => ({ ...prev, [c.id]: toDraft(c, teamAffiliation) }));
   }
 
   function cancelEdit() {
@@ -1266,12 +1342,13 @@ export default function ManageCaddiesPage() {
           name: draft.name.trim(),
           team: draft.team,
           teamOrder: slot,
-          caddyType: isThirdBandTeam(draft.team) ? 'THIRD' : 'HOUSE',
+          caddyType: resolveCaddyTypeFromTeam(draft.team, teamAffiliation),
           employmentStatus: draft.employmentStatus,
           extraFlags: draft.extraFlags,
-          thirdBandSubgroup: isThirdBandTeam(draft.team)
-            ? draft.thirdBandSubgroup
-            : null,
+          thirdBandSubgroup:
+            resolveTeamAffiliation(draft.team, teamAffiliation) === 'THIRD'
+              ? draft.thirdBandSubgroup
+              : null,
           dormitoryResident: draft.dormitoryResident === true,
           phone: draft.phone.trim() === '' ? null : draft.phone.trim(),
           vehicleNumber:
@@ -1395,6 +1472,49 @@ export default function ManageCaddiesPage() {
     }
   }
 
+  async function saveTeamSettings() {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(teamSettingsEffectiveFrom)) {
+      alert('변경 적용일을 YYYY-MM-DD로 입력하세요.');
+      return;
+    }
+    if (
+      !confirm(
+        `${teamSettingsEffectiveFrom}부터 조 소속/운영 상태를 저장할까요?\n캐디 명단과 확정 배치표는 변경되지 않습니다.`
+      )
+    ) {
+      return;
+    }
+    setTeamSettingsSaving(true);
+    try {
+      const res = await fetch('/api/team-affiliations', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          effectiveFrom: teamSettingsEffectiveFrom,
+          teams: teamSettingsDraft,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data?.error || '조 설정 저장 실패');
+        return;
+      }
+      if (data.snapshot) {
+        setTeamSettingsDraft(data.snapshot.rows);
+      }
+      if (data.currentSnapshot) {
+        setTeamAffiliation(data.currentSnapshot);
+      }
+      if (Array.isArray(data.versions)) setTeamAffiliationVersions(data.versions);
+      setMessage(
+        `조 설정 저장됨 (적용일 ${data.snapshot?.effectiveFrom || teamSettingsEffectiveFrom})`
+      );
+    } finally {
+      setTeamSettingsSaving(false);
+    }
+  }
+
   async function createCaddy() {
     if (createKind === 'driving') {
       if (!createDraft.name.trim()) {
@@ -1456,9 +1576,11 @@ export default function ManageCaddiesPage() {
           teamOrder: slot,
           employmentStatus: createDraft.employmentStatus,
           extraFlags: createDraft.extraFlags,
-          thirdBandSubgroup: isThirdBandTeam(createDraft.team)
-            ? createDraft.thirdBandSubgroup
-            : null,
+          thirdBandSubgroup:
+            resolveTeamAffiliation(createDraft.team, teamAffiliation) ===
+            'THIRD'
+              ? createDraft.thirdBandSubgroup
+              : null,
           dormitoryResident: createDraft.dormitoryResident === true,
           phone:
             createDraft.phone.trim() === '' ? null : createDraft.phone.trim(),
@@ -1529,6 +1651,20 @@ export default function ManageCaddiesPage() {
           >
             신규 등록
           </button>
+          <button
+            type="button"
+            className={`cm-btn cm-btn-sm${teamSettingsOpen ? ' cm-btn-primary' : ''}`}
+            onClick={() => {
+              setTeamSettingsOpen((open) => !open);
+              setTeamSettingsDraft(teamAffiliation.rows);
+              setTeamSettingsEffectiveFrom(
+                teamAffiliation.effectiveFrom ||
+                  new Date().toISOString().slice(0, 10)
+              );
+            }}
+          >
+            조 설정
+          </button>
           {viewMode === 'summary' ? (
             <input
               className="cm-search cm-header-search"
@@ -1592,6 +1728,107 @@ export default function ManageCaddiesPage() {
         </div>
       )}
 
+      {teamSettingsOpen && (
+        <section className="cm-card cm-team-settings">
+          <h3>조 설정</h3>
+          <p className="cm-muted">
+            조 번호와 HOUSE/THIRD 소속을 분리합니다. 저장해도 캐디 명단, 재직 상태,
+            과거 확정 배치표는 바뀌지 않습니다. 자동배치는 적용일 기준으로 소속을 읽습니다.
+          </p>
+          <div className="cm-form-grid">
+            <label>
+              변경 적용일
+              <input
+                type="date"
+                value={teamSettingsEffectiveFrom}
+                onChange={(e) => setTeamSettingsEffectiveFrom(e.target.value)}
+              />
+            </label>
+          </div>
+          <div className="cm-table-wrap">
+            <table className="cm-table">
+              <thead>
+                <tr>
+                  <th>조</th>
+                  <th>소속</th>
+                  <th>운영</th>
+                </tr>
+              </thead>
+              <tbody>
+                {teamSettingsDraft.map((row) => (
+                  <tr key={row.team}>
+                    <td>{row.team}</td>
+                    <td>
+                      <select
+                        value={row.affiliation}
+                        onChange={(e) => {
+                          const affiliation = e.target.value as TeamAffiliationKind;
+                          setTeamSettingsDraft((rows) =>
+                            rows.map((item) =>
+                              item.team === row.team
+                                ? { ...item, affiliation }
+                                : item
+                            )
+                          );
+                        }}
+                      >
+                        <option value="HOUSE">HOUSE</option>
+                        <option value="THIRD">THIRD</option>
+                      </select>
+                    </td>
+                    <td>
+                      <select
+                        value={row.operational ? 'ACTIVE' : 'INACTIVE'}
+                        onChange={(e) => {
+                          const operational = e.target.value === 'ACTIVE';
+                          setTeamSettingsDraft((rows) =>
+                            rows.map((item) =>
+                              item.team === row.team
+                                ? { ...item, operational }
+                                : item
+                            )
+                          );
+                        }}
+                      >
+                        <option value="ACTIVE">운영</option>
+                        <option value="INACTIVE">미운영</option>
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {teamAffiliationVersions.length > 0 ? (
+            <p className="cm-muted">
+              저장된 적용일:{' '}
+              {teamAffiliationVersions
+                .map((version) => version.effectiveFrom)
+                .join(', ')}
+            </p>
+          ) : (
+            <p className="cm-muted">아직 저장된 버전이 없으면 1~8 HOUSE, 9~12 THIRD입니다.</p>
+          )}
+          <div className="cm-item-actions">
+            <button
+              type="button"
+              className="cm-btn cm-btn-primary cm-btn-sm"
+              disabled={teamSettingsSaving}
+              onClick={() => void saveTeamSettings()}
+            >
+              {teamSettingsSaving ? '저장 중…' : '조 설정 저장'}
+            </button>
+            <button
+              type="button"
+              className="cm-btn cm-btn-sm"
+              onClick={() => setTeamSettingsOpen(false)}
+            >
+              닫기
+            </button>
+          </div>
+        </section>
+      )}
+
       {createOpen && (
         <section className="cm-card cm-create">
           <h3>
@@ -1640,15 +1877,20 @@ export default function ManageCaddiesPage() {
                       ...d,
                       team,
                       teamOrder: 0,
-                      thirdBandSubgroup: isThirdBandTeam(team)
-                        ? d.thirdBandSubgroup
-                        : null,
+                      thirdBandSubgroup:
+                        resolveTeamAffiliation(team, teamAffiliation) ===
+                        'THIRD'
+                          ? d.thirdBandSubgroup
+                          : null,
                     };
                   })
                 }
               >
                 {PRIMARY_TEAMS.map((t) => (
-                  <option key={t} value={t}>{t}</option>
+                  <option key={t} value={t}>
+                    {t}
+                    {isTeamOperational(t, teamAffiliation) ? '' : ' · 미운영'}
+                  </option>
                 ))}
               </select>
             </label>
@@ -1715,7 +1957,9 @@ export default function ManageCaddiesPage() {
                 autoComplete="off"
               />
             </label>
-            {createKind === 'regular' && isThirdBandTeam(createDraft.team) && (
+            {createKind === 'regular' &&
+              resolveTeamAffiliation(createDraft.team, teamAffiliation) ===
+                'THIRD' && (
               <label>
                 3부반 구분
                 <select
@@ -1982,13 +2226,15 @@ export default function ManageCaddiesPage() {
           ) : null}
           <div className="cm-roster-scroll cm-roster-desktop" aria-label="조별 현장표">
             <div className="cm-roster">
-              <div className="cm-roster-band is-house">
-                {ROSTER_HOUSE_LABEL} 1~8조
-              </div>
-              <div className="cm-roster-band is-third">
-                {ROSTER_THIRD_LABEL} 9~12조
-              </div>
-              <div className="cm-roster-band is-driving">{ROSTER_DRIVING_LABEL}</div>
+              {rosterBoardBandSpans(teamAffiliation).map((span) => (
+                <div
+                  key={`${span.band}-${span.start}`}
+                  className={`cm-roster-band is-${span.band.toLowerCase()}`}
+                  style={{ gridColumn: `${span.start} / span ${span.span}` }}
+                >
+                  {span.label}
+                </div>
+              ))}
               {rosterColumns.map((col) => (
                 <section
                   key={col.key}
@@ -1999,10 +2245,13 @@ export default function ManageCaddiesPage() {
                       : col.band === 'THIRD'
                         ? 'is-third'
                         : 'is-house'
-                  }`}
+                  }${col.operational === false ? ' is-inactive' : ''}`}
                 >
                   <header className="cm-roster-col-head">
-                    <span className="cm-roster-col-title">{col.title}</span>
+                    <span className="cm-roster-col-title">
+                      {col.title}
+                      {col.operational === false ? ' · 미운영' : ''}
+                    </span>
                     <span className="cm-roster-col-count">{col.count}명</span>
                   </header>
                   <ul className="cm-roster-list">
@@ -2073,9 +2322,7 @@ export default function ManageCaddiesPage() {
             <div className="cm-mobile-team-block">
               <p className="cm-mobile-band-label">{ROSTER_HOUSE_LABEL}</p>
               <div className="cm-team-chips" role="tablist" aria-label="하우스 조">
-                {GLANCE_TEAMS.filter((team) =>
-                  (HOUSE_TEAMS as readonly string[]).includes(team)
-                ).map((team) => (
+                {houseTeamsInSnapshot(teamAffiliation).map((team) => (
                   <button
                     key={team}
                     type="button"
@@ -2093,7 +2340,7 @@ export default function ManageCaddiesPage() {
               </div>
               <p className="cm-mobile-band-label">{ROSTER_THIRD_LABEL}</p>
               <div className="cm-team-chips" role="tablist" aria-label="3부반 조">
-                {THIRD_BAND_TEAMS.map((team) => (
+                {thirdTeamsInSnapshot(teamAffiliation).map((team) => (
                   <button
                     key={team}
                     type="button"
@@ -2109,6 +2356,28 @@ export default function ManageCaddiesPage() {
                   </button>
                 ))}
               </div>
+              {inactiveTeamsInSnapshot(teamAffiliation).length > 0 ? (
+                <>
+                  <p className="cm-mobile-band-label">미운영</p>
+                  <div className="cm-team-chips" role="tablist" aria-label="미운영 조">
+                    {inactiveTeamsInSnapshot(teamAffiliation).map((team) => (
+                      <button
+                        key={team}
+                        type="button"
+                        role="tab"
+                        aria-selected={mobileTeam === team}
+                        className={`cm-team-chip ${mobileTeam === team ? 'is-on' : ''}`}
+                        onClick={() => setMobileTeam(team)}
+                      >
+                        {team}
+                        <span>
+                          {rosterColumns.find((col) => col.key === team)?.count ?? 0}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : null}
               <div className="cm-team-chips">
                 <button
                   type="button"
@@ -2216,7 +2485,7 @@ export default function ManageCaddiesPage() {
               <tbody>
                 {filtered.map((c) => {
                   const editing = editingId === c.id;
-                  const draft = drafts[c.id] ?? toDraft(c);
+                  const draft = drafts[c.id] ?? toDraft(c, teamAffiliation);
                   const busy = savingId === c.id;
                   const st = normalizeEmploymentStatus(c.employmentStatus);
                   const isDriving =
@@ -2245,6 +2514,7 @@ export default function ManageCaddiesPage() {
                               emptySlots={editEmptySlots}
                               slotLabel="슬롯"
                               onChange={(patch) => updateDraft(c.id, patch)}
+                              snapshot={teamAffiliation}
                             />
                             <label>
                               재직상태
@@ -2459,7 +2729,7 @@ export default function ManageCaddiesPage() {
           <ul className="cm-dense-list cm-detail-mobile">
             {filtered.map((c) => {
               const editing = editingId === c.id;
-              const draft = drafts[c.id] ?? toDraft(c);
+              const draft = drafts[c.id] ?? toDraft(c, teamAffiliation);
               const busy = savingId === c.id;
               const st = normalizeEmploymentStatus(c.employmentStatus);
               const open = expandedId === c.id || editing;
@@ -2589,6 +2859,7 @@ export default function ManageCaddiesPage() {
                               emptySlots={editEmptySlots}
                               slotLabel="슬롯"
                               onChange={(patch) => updateDraft(c.id, patch)}
+                              snapshot={teamAffiliation}
                             />
                             <label>
                               상태
@@ -3801,7 +4072,7 @@ export default function ManageCaddiesPage() {
               <div className="cm-sheet-edit">
                 {(() => {
                   const c = menuCaddy;
-                  const draft = drafts[c.id] ?? toDraft(c);
+                  const draft = drafts[c.id] ?? toDraft(c, teamAffiliation);
                   const busy = savingId === c.id;
                   return (
                     <>
@@ -3821,6 +4092,7 @@ export default function ManageCaddiesPage() {
                           emptySlots={editEmptySlots}
                           slotLabel="순번"
                           onChange={(patch) => updateDraft(c.id, patch)}
+                          snapshot={teamAffiliation}
                         />
                         <label>
                           재직상태
@@ -4491,15 +4763,15 @@ export default function ManageCaddiesPage() {
           border-right: 1px solid rgba(255,255,255,0.18);
         }
         .cm-roster-band.is-house {
-          grid-column: 1 / span 8;
           background: #1f4d3a;
         }
         .cm-roster-band.is-third {
-          grid-column: 9 / span 4;
           background: #1d4e89;
         }
+        .cm-roster-band.is-inactive {
+          background: #57534e;
+        }
         .cm-roster-band.is-driving {
-          grid-column: 13;
           background: #5b21b6;
         }
         .cm-roster-col {
@@ -4522,6 +4794,13 @@ export default function ManageCaddiesPage() {
         }
         .cm-roster-col.is-driving {
           background: #faf8ff;
+        }
+        .cm-roster-col.is-inactive {
+          background: #f5f5f4;
+          opacity: 0.82;
+        }
+        .cm-team-settings {
+          margin: 0 0 12px;
         }
         .cm-roster-col-head {
           position: sticky;

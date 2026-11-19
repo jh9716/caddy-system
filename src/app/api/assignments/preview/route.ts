@@ -30,22 +30,30 @@ import {
 } from "@/lib/dailySpecialDutyService";
 import { isThirdWeeklyTeam } from "@/lib/thirdWeeklyRotation";
 import { loadEffectiveThirdStartTeam } from "@/lib/thirdWeeklyStartService";
+import { loadTeamAffiliationSnapshot } from "@/lib/teamAffiliationService";
 import { regularPoolExcludingStoredOpsDuty } from "@/lib/opsDutyLivePool";
 import { loadSupportEngineQueuesForDate } from "@/lib/dailySpecialSupportService";
 import { twoOnlyCandidatesFromRecords } from "@/lib/specialDutyTwo";
 import { stampReservationIdentities } from "@/lib/reservationIdentity";
 import { rosterBaselineFromAvailability } from "@/lib/caddyPoolCanonical";
 
-function parseThirdStartTeam(raw: unknown): string | null {
+function parseThirdStartTeam(
+  raw: unknown,
+  snapshot?: Awaited<ReturnType<typeof loadTeamAffiliationSnapshot>>
+): string | null {
   const value = String(raw ?? "").trim();
-  return isThirdWeeklyTeam(value) ? value : null;
+  return isThirdWeeklyTeam(value, snapshot) ? value : null;
 }
 
 async function resolvePreviewThirdStartTeam(
   date: string,
-  explicit: unknown
+  explicit: unknown,
+  snapshot?: Awaited<ReturnType<typeof loadTeamAffiliationSnapshot>>
 ): Promise<string> {
-  return parseThirdStartTeam(explicit) ?? loadEffectiveThirdStartTeam(date);
+  return (
+    parseThirdStartTeam(explicit, snapshot) ??
+    loadEffectiveThirdStartTeam(date, snapshot)
+  );
 }
 
 /** special 태그/라벨에 54홀 힌트가 있으면 54홀 후보로 추출 */
@@ -167,6 +175,7 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
+      const teamAffiliation = await loadTeamAffiliationSnapshot(date);
 
       const file = form.get("file");
       if (!file || !(file instanceof File)) {
@@ -262,7 +271,8 @@ export async function POST(req: NextRequest) {
 
       const thirdStartTeam = await resolvePreviewThirdStartTeam(
         date,
-        form.get("thirdStartTeam")
+        form.get("thirdStartTeam"),
+        teamAffiliation
       );
       const thirdStartCaddyId = parseOptionalThirdStartCaddyId(
         form.get("thirdStartCaddyId")
@@ -298,6 +308,7 @@ export async function POST(req: NextRequest) {
         specialSupportByShift: supportQueues.byShift,
         oneTwoSupport: supportQueues.oneTwoSupport,
         employmentAuthority: employmentRowsFromAvailability(availability),
+        teamAffiliation,
       });
 
       return NextResponse.json({
@@ -332,6 +343,7 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    const teamAffiliation = await loadTeamAffiliationSnapshot(date);
 
     const reservations = stampReservationIdentities(
       (body.reservations || []) as AutoAssignReservation[]
@@ -517,13 +529,15 @@ export async function POST(req: NextRequest) {
       houseStartCaddyId,
       thirdStartTeam: await resolvePreviewThirdStartTeam(
         date,
-        body.thirdStartTeam
+        body.thirdStartTeam,
+        teamAffiliation
       ),
       thirdStartCaddyId: parseOptionalThirdStartCaddyId(body.thirdStartCaddyId),
       caddyDirectory: jsonCaddyDirectory,
       specialSupportByShift: supportQueues.byShift,
       oneTwoSupport: supportQueues.oneTwoSupport,
       employmentAuthority,
+      teamAffiliation,
     });
 
     return NextResponse.json({

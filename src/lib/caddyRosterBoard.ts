@@ -5,16 +5,21 @@
  */
 import {
   DRIVING_POOL_TEAM,
-  HOUSE_TEAMS,
   PRIMARY_TEAMS,
   THIRD_BAND_SUBGROUP_LABELS,
-  THIRD_BAND_TEAMS,
   countsTowardRosterHeadcount,
   isDrivingCaddyType,
   normalizeEmploymentStatus,
   rosterHeadcount,
   type ThirdBandSubgroup,
 } from "@/lib/caddyManage";
+import {
+  DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  isTeamOperational,
+  resolveTeamAffiliation,
+  rosterBandSpans,
+  type TeamAffiliationSnapshot,
+} from "@/lib/teamAffiliation";
 
 export const ROSTER_TEAMS = PRIMARY_TEAMS;
 export const ROSTER_HOUSE_LABEL = "하우스";
@@ -35,6 +40,7 @@ export type RosterBoardColumn = {
   key: string;
   title: string;
   band: "HOUSE" | "THIRD" | "DRIVING";
+  operational: boolean;
   count: number;
   driving: boolean;
   members: RosterBoardCaddy[];
@@ -146,8 +152,10 @@ export function buildRosterColumns(input: {
   rows: RosterBoardCaddy[];
   query?: string;
   drivingHeadcount?: number;
+  teamAffiliation?: TeamAffiliationSnapshot | null;
 }): RosterBoardColumn[] {
   const query = String(input.query ?? "").trim();
+  const snapshot = input.teamAffiliation ?? DEFAULT_TEAM_AFFILIATION_SNAPSHOT;
   const summaries = buildRosterTeamSummaries(input.rows);
   const columns: RosterBoardColumn[] = PRIMARY_TEAMS.map((team) => {
     const summary = summaries.find((t) => t.team === team);
@@ -163,9 +171,8 @@ export function buildRosterColumns(input: {
     return {
       key: team,
       title: team,
-      band: HOUSE_TEAMS.includes(team as (typeof HOUSE_TEAMS)[number])
-        ? "HOUSE"
-        : "THIRD",
+      band: resolveTeamAffiliation(team, snapshot),
+      operational: isTeamOperational(team, snapshot),
       count: summary?.total ?? 0,
       driving: false,
       members,
@@ -186,11 +193,18 @@ export function buildRosterColumns(input: {
     key: DRIVING_POOL_TEAM,
     title: ROSTER_DRIVING_LABEL,
     band: "DRIVING",
+    operational: true,
     count: drivingHeadcount,
     driving: true,
     members: drivingMembers,
   });
   return columns;
+}
+
+export function rosterBoardBandSpans(
+  snapshot?: TeamAffiliationSnapshot | null
+) {
+  return rosterBandSpans(snapshot ?? DEFAULT_TEAM_AFFILIATION_SNAPSHOT);
 }
 
 export type OwnedCartLike = {
@@ -262,8 +276,13 @@ export function listMobileRosterRows(input: {
   return rows;
 }
 
-export function rosterBandOfTeam(team: string): "HOUSE" | "THIRD" | "DRIVING" {
+export function rosterBandOfTeam(
+  team: string,
+  snapshot?: TeamAffiliationSnapshot | null
+): "HOUSE" | "THIRD" | "DRIVING" {
   if (team === DRIVING_POOL_TEAM) return "DRIVING";
-  if ((THIRD_BAND_TEAMS as readonly string[]).includes(team)) return "THIRD";
-  return "HOUSE";
+  return resolveTeamAffiliation(
+    team,
+    snapshot ?? DEFAULT_TEAM_AFFILIATION_SNAPSHOT
+  );
 }

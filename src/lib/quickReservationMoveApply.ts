@@ -34,6 +34,7 @@ import {
 } from "@/lib/dailyBoardDraft";
 import { assertDailyBoardDraftWriteInvariants } from "@/lib/dailyBoardDraftInvariants";
 import { rejectStaleLivePrevious } from "@/lib/liveAssignmentFreshness";
+import type { TeamAffiliationSnapshot } from "@/lib/teamAffiliation";
 
 export const QUICK_MOVE_DRAFT_FORCE_FAIL = "QUICK_MOVE_DRAFT_FORCE_FAIL";
 export const QUICK_MOVE_LIVE_FORCE_FAIL = "QUICK_MOVE_LIVE_FORCE_FAIL";
@@ -68,6 +69,7 @@ export async function applyQuickReservationMove(input: {
   change?: LiveChangeInput;
   changeType?: LiveChangeType;
   specialSupportByShift?: Record<ShiftPart, AutoAssignCaddy[]>;
+  teamAffiliation?: TeamAffiliationSnapshot | null;
   draft: {
     date: string;
     expectedVersion: number;
@@ -111,6 +113,7 @@ export async function applyQuickReservationMove(input: {
     events,
     changeType: input.changeType || input.change?.type,
     specialSupportByShift: input.specialSupportByShift,
+    teamAffiliation: input.teamAffiliation,
   });
   const computeMs = Date.now() - computeStarted;
   const blocking = preview.warnings.filter((w) => w.level === "error");

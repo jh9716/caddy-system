@@ -2508,9 +2508,9 @@ section("3부: HOUSE80 사용 후 spare→THIRD→남은 HOUSE");
   const date = "2026-10-12";
   const house = makeCaddies(100).map((c) => ({ ...c, caddyType: "HOUSE" }));
   const third = [
-    { id: 501, name: "T1", team: "1조", teamOrder: 1, caddyType: "THIRD" },
-    { id: 502, name: "T2", team: "1조", teamOrder: 2, caddyType: "THIRD" },
-    { id: 503, name: "T3", team: "2조", teamOrder: 1, caddyType: "THIRD" },
+    { id: 501, name: "T1", team: "9조", teamOrder: 1, caddyType: "THIRD" },
+    { id: 502, name: "T2", team: "9조", teamOrder: 2, caddyType: "THIRD" },
+    { id: 503, name: "T3", team: "10조", teamOrder: 1, caddyType: "THIRD" },
   ];
   const orderedHouse = [...house].sort(compareCaddyOrder);
   const result = computeAutoAssignmentsV1({
@@ -2765,7 +2765,7 @@ section("reflow 후 spare/3부 순서 재계산");
   const date = "2026-10-17";
   const house = makeCaddies(30).map((c) => ({ ...c, caddyType: "HOUSE" }));
   const third = [
-    { id: 701, name: "TH1", team: "3조", teamOrder: 1, caddyType: "THIRD" },
+    { id: 701, name: "TH1", team: "9조", teamOrder: 1, caddyType: "THIRD" },
   ];
   const ordered = [...house].sort(compareCaddyOrder);
   const previous = computeAutoAssignmentsV1({
@@ -2966,8 +2966,8 @@ function makeThird(n: number, startId = 5000): AutoAssignCaddy[] {
     out.push({
       id: startId + i,
       name: `THIRD${startId + i}`,
-      team: `${(i % 12) + 1}조`,
-      teamOrder: Math.floor(i / 12) + 1,
+      team: `${(i % 4) + 9}조`,
+      teamOrder: Math.floor(i / 4) + 1,
       caddyType: "THIRD",
     });
   }

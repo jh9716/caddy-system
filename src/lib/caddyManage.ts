@@ -1,5 +1,11 @@
 /** 캐디 운영 관리 상수·검증 (DB migration 실행과 무관) */
 
+import {
+  DEFAULT_TEAM_AFFILIATION_SNAPSHOT,
+  resolveTeamAffiliation,
+  type TeamAffiliationSnapshot,
+} from "@/lib/teamAffiliation";
+
 export const PRIMARY_TEAMS = [
   "1조",
   "2조",
@@ -79,13 +85,19 @@ export function occupiesHouseThirdSlot(p: {
 export type TeamCaddyType = "HOUSE" | "THIRD";
 
 /**
- * 서버 canonical invariant:
- * - 1~8조 → HOUSE
- * - 9~12조 → THIRD
- * thirdBandSubgroup(일반/주중/주말)과 독립.
+ * 서버 canonical caddyType.
+ * 기본 스냅샷은 1~8 HOUSE / 9~12 THIRD.
+ * 조 설정 스냅샷이 있으면 조 번호가 아니라 그 소속을 따른다.
+ * DRIVING은 이 헬퍼가 부여하지 않음.
  */
-export function resolveCaddyTypeFromTeam(team: string): TeamCaddyType {
-  return isThirdBandTeam(team) ? "THIRD" : "HOUSE";
+export function resolveCaddyTypeFromTeam(
+  team: string,
+  snapshot?: TeamAffiliationSnapshot | null
+): TeamCaddyType {
+  return resolveTeamAffiliation(
+    team,
+    snapshot ?? DEFAULT_TEAM_AFFILIATION_SNAPSHOT
+  );
 }
 
 export type AffiliationKind = "HOUSE" | "THIRD" | "DRIVING";
@@ -171,23 +183,26 @@ export function thirdBandSubgroupCsvLabel(
 
 /**
  * 최종 team 기준 invariant:
- * - 1~8조: 항상 null. WEEKDAY/WEEKEND 명시 요청이면 400.
- * - 9~12조: null | WEEKDAY | WEEKEND.
- * - requested === undefined → keepCurrent(없으면 null). 1~8→9~12 이동 시 keepCurrent는 보통 null.
+ * - HOUSE 소속 조: 항상 null. WEEKDAY/WEEKEND 명시 요청이면 400.
+ * - THIRD 소속 조: null | WEEKDAY | WEEKEND.
+ * - requested === undefined → keepCurrent(없으면 null).
+ * 기본 스냅샷은 1~8 HOUSE / 9~12 THIRD.
  */
 export function resolveThirdBandSubgroup(input: {
   team: string;
   requested: unknown;
   /** update 시 현재 DB 값. create면 null/undefined */
   current?: ThirdBandSubgroup | null;
+  snapshot?: TeamAffiliationSnapshot | null;
 }): ThirdBandSubgroup | null {
   const team = String(input.team ?? "").trim();
   const requested = parseThirdBandSubgroupInput(input.requested);
+  const snapshot = input.snapshot ?? DEFAULT_TEAM_AFFILIATION_SNAPSHOT;
 
-  if (!isThirdBandTeam(team)) {
+  if (resolveTeamAffiliation(team, snapshot) !== "THIRD") {
     if (requested === "WEEKDAY" || requested === "WEEKEND") {
       throw new ThirdBandSubgroupError(
-        "1~8조 캐디는 주중반/주말반(thirdBandSubgroup)을 가질 수 없습니다."
+        "HOUSE 소속 조 캐디는 주중반/주말반(thirdBandSubgroup)을 가질 수 없습니다."
       );
     }
     return null;

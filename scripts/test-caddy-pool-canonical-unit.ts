@@ -750,6 +750,11 @@ section("source: no stale unavailable union / no destructive pool shrink");
     "availability still cache-or-fetch; mutation uses Draft offSnapshot"
   );
   assert(
+    /loadTeamAffiliationSnapshot\(ymd\)/.test(service) &&
+      /teamAffiliation,/.test(service),
+    "canonical availability uses date-scoped team affiliation"
+  );
+  assert(
     /OFF_SHEET_RESOLVE_TIMEOUT_MS/.test(service) &&
       !/off-sheet-timeout"\), 4000/.test(service),
     "persist OFF fetch timeout is longer than 4s"

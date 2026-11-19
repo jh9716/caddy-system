@@ -1042,15 +1042,15 @@ console.log("== caddies roster board UI source ==");
       /caddyType: 'DRIVING'/.test(src) &&
       /function saveEdit\(id: number\)/.test(src) &&
       /function AffiliationTeamFields\(/.test(src) &&
-      /caddyType: isThirdBandTeam\(draft\.team\) \? 'THIRD' : 'HOUSE'/.test(src) &&
+      /caddyType: resolveCaddyTypeFromTeam\(draft\.team, teamAffiliation\)/.test(src) &&
       /originalDriving \|\| \(original != null && draft\.team !== original\.team\)/.test(
         src
       ),
     "menu reuses existing PATCH save/leave/return/driving APIs"
   );
   assert(
-    /option value="HOUSE">HOUSE \(1~8조\)/.test(src) &&
-      /option value="THIRD">3부반 \(9~12조\)/.test(src) &&
+    /option value="HOUSE">HOUSE/.test(src) &&
+      /option value="THIRD">3부반/.test(src) &&
       /option value="DRIVING">드라이빙/.test(src) &&
       /!leave \? \(\s*<button[\s\S]*?소속\/조 변경/.test(sheetBlock),
     "driving caddies can open 소속/조 변경"
@@ -1064,6 +1064,16 @@ console.log("== caddies roster board UI source ==");
       /createKind === 'driving'/.test(src) &&
       /cm-detail-tools/.test(src),
     "create/import/export remain reachable from 상세 관리"
+  );
+  assert(
+    /조 설정/.test(src) &&
+      /\/api\/team-affiliations/.test(src) &&
+      /캐디 명단과 확정 배치표는 변경되지 않습니다/.test(src) &&
+      /caddyRowsUnchanged/.test(
+        fs.readFileSync(path.resolve("src/app/api/team-affiliations/route.ts"), "utf8")
+      ) &&
+      /setTeamAffiliation\(data.currentSnapshot\)/.test(src),
+    "조 설정 panel does not rewrite roster or published boards"
   );
   assert(
     /차량번호/.test(src) &&
