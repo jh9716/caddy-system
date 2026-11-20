@@ -27,6 +27,7 @@ const ADMIN_PREFETCH = [
   "/manage/off-requests",
   "/manage/assignments",
   "/manage/tools",
+  "/chat",
 ] as const;
 
 export default function ManageShell({
