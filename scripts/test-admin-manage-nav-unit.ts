@@ -40,8 +40,13 @@ function read(rel: string) {
 console.log("== main menu order ==");
 // 자유게시판 V1: NEXT_PUBLIC_FREE_BOARD_ENABLED=1 일 때만 "코스 제보" 뒤에 추가. OFF 면 기존과 완전히 동일.
 const FB_ON = process.env.NEXT_PUBLIC_FREE_BOARD_ENABLED === "1";
+// 커뮤니티 자유게시판(/talk): 같은 플래그 ON 일 때 가배치표 바로 다음에 추가.
 const withFb = (list: string[], after: string, item: string) =>
-  FB_ON ? list.flatMap((x) => (x === after ? [x, item] : [x])) : list;
+  FB_ON
+    ? list.flatMap((x) =>
+        x === after ? [x, item, item.startsWith("/") ? "/talk" : "자유게시판"] : [x]
+      )
+    : list;
 assert(
   ADMIN_MAIN_NAV_HREFS.join(",") ===
     withFb([

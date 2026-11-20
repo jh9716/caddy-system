@@ -10,16 +10,19 @@ export default function FreeBoardComments({
   postId,
   initialComments,
   canCompose,
+  apiBase = "/api/free-board",
 }: {
   postId: number;
   initialComments: FreeBoardCommentPublic[];
   canCompose: boolean;
+  /** 댓글 API 기준 경로. 기본 = 가배치표. 자유게시판은 /api/talk. */
+  apiBase?: string;
 }) {
   const [comments, setComments] = useState(initialComments);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const liveCount = useMemo(() => liveCommentCount(comments), [comments]);
-  const base = `/api/free-board/${postId}/comments`;
+  const base = `${apiBase}/${postId}/comments`;
 
   async function reload() {
     const res = await fetch(base, { credentials: "include", cache: "no-store" }).catch(() => null);

@@ -58,13 +58,13 @@ section("member menus");
   const fbOn = process.env.NEXT_PUBLIC_FREE_BOARD_ENABLED === "1";
   assert(
     labels.join(",") ===
-      (fbOn ? "홈,공지,제보,가배치표 게시판,배치표,휴무 신청,채팅,내 대시보드" : "홈,공지,제보,배치표,휴무 신청,채팅,내 대시보드"),
+      (fbOn ? "홈,공지,제보,가배치표 게시판,자유게시판,배치표,휴무 신청,채팅,내 대시보드" : "홈,공지,제보,배치표,휴무 신청,채팅,내 대시보드"),
     "member menu labels"
   );
   assert(
     hrefs.join(",") ===
       (fbOn
-        ? "/,/notice,/course-reports,/community,/board,/off-requests,/chat,/caddy"
+        ? "/,/notice,/course-reports,/community,/talk,/board,/off-requests,/chat,/caddy"
         : "/,/notice,/course-reports,/board,/off-requests,/chat,/caddy"),
     "member hrefs"
   );
