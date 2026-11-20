@@ -244,6 +244,117 @@ t(repoMigs.includes("20261109193000_comment_replies_v1"), "comment_replies_v1 mi
     "실행 직전 목록이 바뀌면 HOLD"
   );
 }
+// ── PR #380 자유게시판 V1 전용 Preview gate ──
+{
+  const G = require("./maintenance/single-migration-gate.cjs");
+  const {
+    gateCommunityFreeBoardPreviewMigrate: gate,
+    gateCommentRepliesPreviewMigrate: repliesGate,
+    isCommunityFreeBoardPreviewBranch: isCm,
+    COMMUNITY_FREE_BOARD_MIGRATION: CT,
+    COMMUNITY_FREE_BOARD_MIGRATION_SHA256: CSHA,
+    COMMUNITY_FREE_BOARD_BRANCH: CB,
+    PREVIEW_PROJECT_ID: PID,
+    PREVIEW_NEON_ENDPOINT: PEP,
+  } = G;
+  const { repoMigrationChecksums } = require("./preview-db/migration-state.cjs");
+  const migDir = path.join(__dirname, "..", "prisma", "migrations");
+  t(CT === "20261120160000_community_free_board_v1", "community 대상 migration 이름 고정");
+  t(CSHA === "b284927f596d25861baefe4ab2859e50307996e22c3585dd467344883a756a4f", "community 대상 SHA-256 고정");
+  t(CB === "preview-db-pr380-community-free-board", "community 브랜치 이름 고정");
+  t(isCm("preview-db-pr380-community-free-board"), "community 전용 브랜치 정확히 일치");
+  t(!isCm("preview-db-pr380-community-free-board-x"), "접미사 붙은 브랜치 거부 (정확 일치만)");
+  t(!isCm("freeboard-v1-20261120"), "제품 브랜치는 community gate 아님");
+  t(!isCm("main") && !isCm("preview-db-free-board-v1") && !isCm(""), "main·다른 preview-db·빈 이름 거부");
+  // 실제 repo 기반 입력 (67개 = 66 + 대상)
+  const repo67 = listRepoMigrations(migDir);
+  t(repo67.length === 67 && repo67[66] === CT, "repo 67개, 마지막이 대상");
+  const sums = repoMigrationChecksums(migDir, repo67);
+  t(sums[CT] === CSHA, "repo 대상 migration.sql SHA-256 = 고정값");
+  t(sums["20261031220000_free_board_v1"] && /^[0-9a-f]{64}$/.test(sums["20261031220000_free_board_v1"]), "repo checksum 계산 (sha256 hex)");
+  const applied66 = repo67.slice(0, 66);
+  const db66 = Object.fromEntries(applied66.map((m) => [m, sums[m]]));
+  const cBase = {
+    refName: CB,
+    previewProjectId: PID,
+    neonEndpoint: PEP,
+    repo: repo67,
+    appliedFinished: applied66,
+    failedNames: [],
+    statusPending: [CT],
+    repoChecksums: sums,
+    appliedChecksums: db66,
+  };
+  const ok = gate(cBase);
+  t(ok.action === "allow", "PASS: 66 적용·checksum 일치·대상 1개 pending → allow");
+  const H = (over, name) => {
+    const r = gate({ ...cBase, ...over });
+    t(r.action === "hold" && typeof r.reason === "string" && r.reason.length > 0, `HOLD: ${name} (${r.reason})`); if (process.env.SHOW_REASONS) console.log(`  HOLD ${name} → ${r.reason}`);
+  };
+  H({ appliedFinished: repo67, appliedChecksums: { ...db66, [CT]: CSHA }, statusPending: [] }, "pending 0개 (이미 적용)");
+  const extra = "20261121000000_other_v1";
+  H({ repo: [...repo67, extra], statusPending: [CT, extra], repoChecksums: { ...sums, [extra]: "a".repeat(64) } }, "pending 2개");
+  H({ statusPending: [CT, extra] }, "prisma status 에 다른 pending");
+  H({ appliedFinished: applied66.slice(0, 65), appliedChecksums: Object.fromEntries(applied66.slice(0, 65).map((m) => [m, sums[m]])), statusPending: [applied66[65], CT] }, "기존 66개 중 1개 미적용 (pending 2개)");
+  const wrong = "20261120160000_community_free_board_v2";
+  H({ repo: [...applied66, wrong], statusPending: [wrong], repoChecksums: { ...sums, [wrong]: CSHA } }, "대상 이름 다름");
+  H({ repoChecksums: { ...sums, [CT]: "0".repeat(64) } }, "대상 SQL sha 불일치");
+  H({ repoChecksums: { ...sums, [CT]: undefined } }, "대상 SQL sha 없음");
+  H({ appliedChecksums: { ...db66, [applied66[10]]: "f".repeat(64) } }, "기존 migration checksum 불일치");
+  H({ appliedChecksums: Object.fromEntries(applied66.slice(1).map((m) => [m, sums[m]])) }, "기존 migration checksum 누락");
+  H({ failedNames: ["20261117233000_team_affiliation_settings"] }, "실패(finished_at NULL) 행");
+  H({ failedNames: ["20261031220000_free_board_v1"] }, "rolled-back 행");
+  const unk = "20269999999999_unknown";
+  H({ appliedFinished: [...applied66, unk], appliedChecksums: { ...db66, [unk]: "b".repeat(64) } }, "unknown 적용 행");
+  H({ appliedFinished: [...applied66.slice(0, 65), applied66[0]] }, "중복 적용 행");
+  H({ appliedFinished: [...applied66.slice(0, 65), unk], appliedChecksums: { ...db66, [unk]: "b".repeat(64) }, statusPending: [applied66[65], CT] }, "unknown 적용 행 (개수는 66 그대로)");
+  H({ dbError: "psql failed" }, "DB 조회 오류");
+  H({ dbErrorAgain: "connection reset" }, "재조회 중 DB 오류");
+  H({ appliedFinished: null }, "입력 누락 (fail-closed)");
+  H({ appliedChecksums: null }, "DB checksum 정보 없음 (fail-closed)");
+  H({ appliedFinishedAgain: repo67, appliedChecksumsAgain: { ...db66, [CT]: CSHA }, statusPendingAgain: [] }, "실행 직전 재조회 시 목록 바뀜");
+  H({ appliedChecksumsAgain: { ...db66, [applied66[3]]: "c".repeat(64) } }, "실행 직전 재조회 시 checksum 바뀜");
+  H({ repoChecksumsAgain: { ...sums, [CT]: "d".repeat(64) } }, "실행 직전 재조회 시 대상 SQL 바뀜");
+  H({ previewProjectId: "morning-tooth-60659454" }, "운영 프로젝트 id");
+  H({ previewProjectId: undefined }, "프로젝트 id 없음");
+  H({ neonEndpoint: "ep-crimson-cell-a1i1tpce" }, "운영 endpoint");
+  H({ neonEndpoint: "n/a" }, "endpoint 확인 불가 (정확 일치 필요)");
+  H({ neonEndpoint: undefined }, "endpoint 없음");
+  t(gate({ ...cBase, refName: "preview-db-comment-replies-8d28" }).action === "skip", "다른 preview-db 브랜치에서는 community gate 미적용");
+  t(gate({ ...cBase, refName: "main" }).action === "skip", "main 에서는 community gate 미적용");
+  t(repliesGate({ ...cBase, refName: CB }).action === "skip", "community 브랜치에서 댓글 gate 미적용");
+  // extraCheck 예외도 HOLD
+  const throwing = { ...cBase };
+  Object.defineProperty(throwing, "repoChecksums", { get() { throw new Error("boom"); }, enumerable: true });
+  t(gate(throwing).action === "hold", "HOLD: 내부 예외 (fail-closed)");
+  // 기존 댓글 gate 동작 유지
+  const target = "20261109193000_comment_replies_v1";
+  const rRepo = ["20260919070000_comment_v1", target];
+  const rBase = { refName: "preview-db-comment-replies-8d28", previewProjectId: PID, neonEndpoint: PEP, repo: rRepo, appliedFinished: [rRepo[0]], failedNames: [], statusPending: [target] };
+  t(repliesGate(rBase).action === "allow", "댓글 gate 기존 동작 유지 (allow)");
+  t(repliesGate({ ...rBase, neonEndpoint: "n/a" }).action === "allow", "댓글 gate 기존 동작 유지 (n/a 허용 그대로)");
+}
+const communitySnapSql = fs.readFileSync(path.join(__dirname, "preview-db", "community-snapshot-readonly.sql"), "utf8");
+const communityVerifySql = fs.readFileSync(path.join(__dirname, "preview-db", "community-verify-readonly.sql"), "utf8");
+for (const [name, sql] of [["snapshot", communitySnapSql], ["verify", communityVerifySql]]) {
+  t(/BEGIN TRANSACTION READ ONLY/.test(sql) && /ROLLBACK;\s*$/.test(sql), `community ${name} SQL 읽기 전용`);
+  t(!/\b(INSERT|UPDATE|DELETE|ALTER|DROP|CREATE|TRUNCATE|GRANT)\b/i.test(sql.replace(/^--.*$/gm, "")), `community ${name} SQL 쓰기 구문 없음`);
+  t(!/"(body|title|username|password|name|storageKey)"/.test(sql), `community ${name} SQL 본문·개인정보 컬럼 직접 출력 없음`);
+}
+for (const tbl of ["User", "Caddy", "Comment", "CommentThread", "FreeBoardPost", "FreeBoardPhoto"]) {
+  t(new RegExp(`FROM "${tbl}"`).test(communitySnapSql), `community 지문에 ${tbl} 포함`);
+}
+t(/CommunityPost_authorUserId_fkey/.test(communityVerifySql) && /CommunityPhoto_postId_fkey/.test(communityVerifySql), "community verify FK 2개");
+t(/COMMUNITY_POST/.test(communityVerifySql) && /CommunityBoardType/.test(communityVerifySql), "community verify enum 값");
+t(/20261120160000_community_free_board_v1/.test(communityVerifySql), "community verify migration 기록");
+t(/gateCommunityFreeBoardPreviewMigrate/.test(stateSrc), "state.cjs community gate 사용");
+t(/isCommunityFreeBoardPreviewBranch\(refName\)/.test(stateSrc), "state.cjs migrate-gate 에서 community 브랜치 판별");
+t(/PARTIALLY_MIGRATED \(state/.test(stateSrc), "state.cjs community: PARTIALLY_MIGRATED 만 허용");
+t(/repoMigrationChecksums\(migDir, repoAgain\)/.test(stateSrc), "state.cjs community: 실행 직전 repo checksum 재계산");
+t(/existing data changed across migrate/.test(stateSrc), "state.cjs community: migrate 전후 지문 비교");
+t(/CommunityPost must be empty after migrate/.test(stateSrc) && /CommunityPhoto must be empty after migrate/.test(stateSrc), "state.cjs community: 새 테이블 0행 검증");
+t(/community_free_board_v1 checksum mismatch/.test(stateSrc), "state.cjs community: 적용 후 checksum 검증");
+t(/cannot write community before-snapshot/.test(stateSrc), "state.cjs community: 지문 저장 실패 시 HOLD");
 t(/gateCommentRepliesPreviewMigrate/.test(stateSrc), "state.cjs 댓글 migrate-gate 재사용");
 t(/PREVIEW_REF_NAME/.test(wfRaw), "workflow 가 브랜치 이름을 migrate-gate 에 전달");
 t((wfRaw.match(/state\.cjs migrate-gate/g) || []).length >= 2, "migrate 직전 migrate-gate 재조회");

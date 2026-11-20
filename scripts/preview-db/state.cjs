@@ -3,15 +3,44 @@
 "use strict";
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { validatePreviewDbUrl } = require("./validate-url.cjs");
 
-const { listRepoMigrations, classifyMigrationState } = require("./migration-state.cjs");
+const { listRepoMigrations, classifyMigrationState, repoMigrationChecksums } = require("./migration-state.cjs");
 const {
   gateCommentRepliesPreviewMigrate,
+  gateCommunityFreeBoardPreviewMigrate,
   isCommentRepliesPreviewBranch,
+  isCommunityFreeBoardPreviewBranch,
   COMMENT_REPLIES_MIGRATION,
+  COMMUNITY_FREE_BOARD_MIGRATION,
+  COMMUNITY_FREE_BOARD_MIGRATION_SHA256,
 } = require("../maintenance/single-migration-gate.cjs");
+// PR #380: migrate-gate 가 남기는 migrate 직전 지문 (같은 job 의 verify 가 비교). 값에 비밀·개인정보 없음.
+const COMMUNITY_SNAPSHOT_FILE =
+  process.env.PREVIEW_DB_COMMUNITY_SNAPSHOT || path.join(os.tmpdir(), "preview-db-pr380-community-before.json");
+const COMMUNITY_SNAPSHOT_KEYS = [
+  "snap_user_total",
+  "snap_user_id_fp",
+  "snap_caddy_total",
+  "snap_caddy_id_fp",
+  "snap_comment_total",
+  "snap_comment_row_fp",
+  "snap_thread_total",
+  "snap_thread_row_fp",
+  "snap_free_board_post_total",
+  "snap_free_board_post_row_fp",
+  "snap_free_board_photo_total",
+  "snap_free_board_photo_row_fp",
+];
+function readCommunitySnapshot() {
+  const snap = psql(fs.readFileSync(path.join(__dirname, "community-snapshot-readonly.sql"), "utf8"));
+  for (const k of COMMUNITY_SNAPSHOT_KEYS) {
+    if (!snap[k]) die(`community snapshot missing ${k}`);
+  }
+  return snap;
+}
 const mode = process.argv[2];
 const localHarness = process.argv.includes("--local-harness");
 if (localHarness && process.env.GITHUB_ACTIONS === "true") die("--local-harness not allowed in Actions");
@@ -70,22 +99,31 @@ function readPrismaMigrationNames() {
 SELECT 'applied=' || coalesce(string_agg(migration_name, ',' ORDER BY migration_name), '') FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL;
 SELECT 'failed=' || count(*) FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL;
 SELECT 'failed_names=' || coalesce(string_agg(migration_name, ',' ORDER BY migration_name), '') FROM "_prisma_migrations" WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL;
+SELECT 'checksums=' || coalesce(string_agg(migration_name || ':' || coalesce(checksum, ''), ',' ORDER BY migration_name), '') FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL;
 ROLLBACK;`);
+  const checksums = {};
+  for (const pair of q.checksums ? q.checksums.split(",") : []) {
+    const i = pair.indexOf(":");
+    if (i > 0) checksums[pair.slice(0, i)] = pair.slice(i + 1);
+  }
   return {
     applied: q.applied ? q.applied.split(",") : [],
     failed: Number(q.failed),
     failedNames: q.failed_names ? q.failed_names.split(",") : [],
+    checksums,
   };
 }
 
 let applied = [];
 let failed = 0;
 let failedNames = [];
+let appliedChecksums = {};
 if (hasPm) {
   const q = readPrismaMigrationNames();
   applied = q.applied;
   failed = q.failed;
   failedNames = q.failedNames;
+  appliedChecksums = q.checksums;
   report.applied_migrations = String(applied.length);
   report.failed_migrations = String(failed);
 }
@@ -153,12 +191,93 @@ if (mode === "verify") {
   if (report.comment_id_fingerprint && vr.comment_id_fingerprint && report.comment_id_fingerprint !== vr.comment_id_fingerprint) {
     die("Comment id fingerprint changed; existing rows were modified");
   }
+  const verifyRef = process.env.PREVIEW_REF_NAME || process.env.GITHUB_REF_NAME || "";
+  if (isCommunityFreeBoardPreviewBranch(verifyRef)) {
+    const cv = psql(fs.readFileSync(path.join(__dirname, "community-verify-readonly.sql"), "utf8"));
+    for (const [k, val] of Object.entries(cv)) console.log(`verify.${k}=${val}`);
+    if (cv.community_post_table !== "1") die("CommunityPost table missing");
+    if (cv.community_photo_table !== "1") die("CommunityPhoto table missing");
+    if (cv.community_post_author_fk_delete !== "RESTRICT") die("CommunityPost author FK must be ON DELETE RESTRICT");
+    if (cv.community_photo_post_fk_delete !== "CASCADE") die("CommunityPhoto post FK must be ON DELETE CASCADE");
+    if (cv.community_board_type_enum !== "FREE") die("CommunityBoardType enum must be exactly FREE");
+    if (cv.comment_target_community_post !== "1") die("CommentTargetType COMMUNITY_POST missing");
+    if (cv.community_posts !== "0") die("CommunityPost must be empty after migrate (no seed)");
+    if (cv.community_photos !== "0") die("CommunityPhoto must be empty after migrate (no seed)");
+    if (cv.community_comment_threads !== "0") die("COMMUNITY_POST comment threads must be empty after migrate");
+    if (cv.community_migration_finished !== "1") die("community_free_board_v1 migration not finished");
+    if (cv.community_migration_checksum !== COMMUNITY_FREE_BOARD_MIGRATION_SHA256) die("community_free_board_v1 checksum mismatch");
+    if (cv.migrations_not_ok !== "0") die("failed or rolled-back migrations present");
+    const after = readCommunitySnapshot();
+    if (fs.existsSync(COMMUNITY_SNAPSHOT_FILE)) {
+      let before;
+      try {
+        before = JSON.parse(fs.readFileSync(COMMUNITY_SNAPSHOT_FILE, "utf8"));
+      } catch {
+        die("community before-snapshot unreadable");
+      }
+      for (const k of COMMUNITY_SNAPSHOT_KEYS) {
+        if (!before || before[k] !== after[k]) die(`existing data changed across migrate (${k})`);
+      }
+      console.log("community_before_after=identical");
+    } else {
+      console.log("community_before_after=no-before-snapshot (standalone verify; structure checks only)");
+    }
+  }
   process.exit(0);
 }
 if (mode === "migrate-gate") {
   const refName = process.env.PREVIEW_REF_NAME || process.env.GITHUB_REF_NAME || "";
   report.ref_name = refName;
   console.log(`ref_name=${refName}`);
+  if (isCommunityFreeBoardPreviewBranch(refName)) {
+    // PR #380 전용: 66 적용 + checksum 일치 + 대상 1개만 pending + 대상 SQL sha 고정. 어떤 오류든 HOLD (fail-closed).
+    let gate;
+    let pendingAgain = [];
+    try {
+      if (!hasPm) die("HOLD: community migrate requires _prisma_migrations");
+      if (state !== "PARTIALLY_MIGRATED") die(`HOLD: community migrate requires PARTIALLY_MIGRATED (state ${state})`);
+      const migDir = path.join(__dirname, "..", "..", "prisma", "migrations");
+      const repoChecksums = repoMigrationChecksums(migDir, repoMigrations);
+      const repoAgain = listRepoMigrations(migDir);
+      const repoChecksumsAgain = repoMigrationChecksums(migDir, repoAgain);
+      const again = readPrismaMigrationNames();
+      pendingAgain = repoAgain.filter((m) => !again.applied.includes(m));
+      const pendingFirst = repoMigrations.filter((m) => !applied.includes(m));
+      gate = gateCommunityFreeBoardPreviewMigrate({
+        refName,
+        previewProjectId: process.env.PREVIEW_PROJECT_ID,
+        neonEndpoint: base.neon_endpoint,
+        repo: repoMigrations,
+        appliedFinished: applied,
+        failedNames,
+        statusPending: pendingFirst,
+        repoChecksums,
+        appliedChecksums,
+        repoAgain,
+        appliedFinishedAgain: again.applied,
+        failedNamesAgain: again.failedNames,
+        statusPendingAgain: pendingAgain,
+        repoChecksumsAgain,
+        appliedChecksumsAgain: again.checksums,
+      });
+    } catch (e) {
+      die(`HOLD: community gate error (${e && e.message ? e.message : "unknown"})`);
+    }
+    console.log(`community_free_board_gate=${gate.action}`);
+    console.log(`community_free_board_target=${COMMUNITY_FREE_BOARD_MIGRATION}`);
+    console.log(`community_free_board_target_sha256=${COMMUNITY_FREE_BOARD_MIGRATION_SHA256}`);
+    console.log(`pending_migrations=${pendingAgain.length}`);
+    if (gate.action !== "allow") die(`HOLD: ${gate.reason}`);
+    // migrate 직전 지문 저장 (verify 가 비교). 저장 실패 시 HOLD.
+    const snap = readCommunitySnapshot();
+    try {
+      fs.writeFileSync(COMMUNITY_SNAPSHOT_FILE, JSON.stringify(snap), { mode: 0o600 });
+    } catch {
+      die("HOLD: cannot write community before-snapshot");
+    }
+    for (const k of COMMUNITY_SNAPSHOT_KEYS) console.log(`before.${k}=${snap[k]}`);
+    process.exit(0);
+  }
   if (isCommentRepliesPreviewBranch(refName)) {
     if (!hasPm) die("HOLD: comment-replies migrate requires _prisma_migrations");
     const repoAgain = listRepoMigrations(path.join(__dirname, "..", "..", "prisma", "migrations"));

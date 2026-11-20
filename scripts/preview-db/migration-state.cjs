@@ -47,4 +47,16 @@ function classifyMigrationState({ tables, otherObjects, hasPm, applied, failed, 
   return { state, missing, unknown, expected: repo.length };
 }
 
-module.exports = { listRepoMigrations, classifyMigrationState, MIGRATION_DIR_RE };
+/** repo migration.sql 의 SHA-256 (Prisma _prisma_migrations.checksum 과 같은 방식). 읽기 실패 시 throw. */
+function repoMigrationChecksums(migrationsDir, names) {
+  const crypto = require("node:crypto");
+  const out = {};
+  for (const n of names) {
+    if (!MIGRATION_DIR_RE.test(n)) throw new Error(`invalid migration dir name: ${n}`);
+    const buf = fs.readFileSync(path.join(migrationsDir, n, "migration.sql"));
+    out[n] = crypto.createHash("sha256").update(buf).digest("hex");
+  }
+  return out;
+}
+
+module.exports = { listRepoMigrations, classifyMigrationState, repoMigrationChecksums, MIGRATION_DIR_RE };
