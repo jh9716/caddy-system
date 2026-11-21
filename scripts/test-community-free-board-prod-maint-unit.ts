@@ -268,5 +268,23 @@ assert(/persist-credentials: false/.test(wf), "checkout 자격 증명 비보존"
 assert(!/(echo|printf)[^\n]*\$\{?DATABASE_URL\b/.test(wf), "URL echo 없음");
 assert(!/vercel/i.test(wf), "Vercel 단계 없음");
 
+console.log("== static: local tsx only (no dynamic download) ==");
+const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+const lock = JSON.parse(fs.readFileSync(path.join(ROOT, "package-lock.json"), "utf8"));
+const tsxPin = pkg.devDependencies?.tsx;
+assert(tsxPin === "4.23.15", "package.json devDependencies.tsx 정확 고정 4.23.15 (^/~ 없음)");
+assert(!pkg.dependencies?.tsx, "tsx 는 dependencies 가 아닌 devDependencies 에만");
+assert(lock.packages?.[""]?.devDependencies?.tsx === tsxPin, "lock 루트 devDependencies.tsx == package.json");
+assert(lock.packages?.["node_modules/tsx"]?.version === tsxPin && /^sha512-/.test(lock.packages?.["node_modules/tsx"]?.integrity ?? ""), "lock node_modules/tsx 버전·integrity 고정");
+assert(!/\bnpx\b/.test(wf), "workflow 에 npx 없음 (동적 설치 경로 없음)");
+assert(!/npm (install|i|exec|x)\b|\bpnpm\b|\byarn\b|\bbunx?\b/.test(wf), "workflow 설치는 npm ci 만");
+assert((wf.match(/run: npm ci --no-audit --no-fund/g) || []).length === 1, "npm ci (lock 고정) 1회");
+assert(/test -x node_modules\/\.bin\/tsx/.test(wf), "실행 전 로컬 tsx 존재 검사");
+assert(/\[ "\$want" = "4\.23\.15" \] && \[ "\$got" = "\$want" \]/.test(wf), "로컬 tsx 버전 == 고정 버전 검사");
+const runIdx = wf.indexOf("./node_modules/.bin/tsx scripts/maintenance/deploy-community-free-board-migration.ts");
+assert(runIdx > 0 && wf.indexOf("Verify pinned local tsx") < runIdx && wf.indexOf("Verify pinned local tsx") > wf.indexOf("run: npm ci"), "npm ci → 버전 검사 → 로컬 tsx 로 스크립트 실행 순서");
+const verifyStep = wf.slice(wf.indexOf("Verify pinned local tsx"), wf.indexOf("- name: Run guarded script"));
+assert(!/secrets\./.test(verifyStep), "tsx 검사 단계에는 운영 secret 없음");
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
