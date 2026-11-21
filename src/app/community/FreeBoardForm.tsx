@@ -21,7 +21,6 @@ import {
   FREE_BOARD_PHOTO_ACCEPT,
   FREE_BOARD_PHOTO_MAX,
   FREE_BOARD_TITLE_MAX,
-  freeBoardPhotoSrc,
   type FreeBoardPhotoPublic,
 } from "@/lib/freeBoardConstants";
 import {
@@ -38,15 +37,41 @@ type Pending = FreeBoardUploadItem & { previewUrl: string; fileId: string; finge
 /** 변환/디코딩 실패 사진: 목록에 파일명 + 사유로 표시 (업로드 대상 아님). */
 type PickFailure = { key: string; name: string; message: string; heic: boolean };
 
+/**
+ * 게시판별 경로·문구. 기본값 = 기존 가배치표(/community, /api/free-board) 그대로.
+ * 커뮤니티 자유게시판(/talk)은 같은 폼(사진 9장·Ctrl+V·Android 파일 선택)을 자기 경로로 재사용한다.
+ */
+export type FreeBoardFormBoard = {
+  apiBase: string;
+  pageBase: string;
+  titlePlaceholder: string;
+  bodyPlaceholder: string;
+  submitLabel: string;
+  requiredNote: string;
+  partialSavedNoun: string;
+};
+
+const DEFAULT_BOARD: FreeBoardFormBoard = {
+  apiBase: "/api/free-board",
+  pageBase: "/community",
+  titlePlaceholder: "예: 11월 2일(월) 가배치표",
+  bodyPlaceholder: "안내 사항 (변경·주의 사항 등)",
+  submitLabel: "가배치표 올리기",
+  requiredNote: "제목과 안내 내용을 입력해 주세요.",
+  partialSavedNoun: "가배치표 글",
+};
+
 const MAX_NOTE = `사진은 최대 ${FREE_BOARD_PHOTO_MAX}장까지 첨부할 수 있습니다.`;
 const LEAVE_CONFIRM = "사진 업로드가 끝나지 않았습니다. 이 페이지를 떠나면 업로드가 중단됩니다. 떠나시겠습니까?";
 
 export default function FreeBoardForm({
   mode = "new",
   initial,
+  board = DEFAULT_BOARD,
 }: {
   mode?: "new" | "edit";
   initial?: { id: number; title: string; body: string; photos: FreeBoardPhotoPublic[] };
+  board?: FreeBoardFormBoard;
 }) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
@@ -301,7 +326,7 @@ export default function FreeBoardForm({
   }
 
   function finish(postId: number) {
-    router.replace(`/community/${postId}`);
+    router.replace(`${board.pageBase}/${postId}`);
     router.refresh();
   }
 
@@ -313,7 +338,7 @@ export default function FreeBoardForm({
       return;
     }
     if (!title.trim() || !body.trim()) {
-      setNote("제목과 안내 내용을 입력해 주세요.");
+      setNote(board.requiredNote);
       return;
     }
     setBusy(true);
@@ -322,7 +347,7 @@ export default function FreeBoardForm({
     if (postId === null) {
       let res: Response;
       try {
-        res = await fetch(isEdit ? `/api/free-board/${initial?.id}` : "/api/free-board", {
+        res = await fetch(isEdit ? `${board.apiBase}/${initial?.id}` : board.apiBase, {
           method: isEdit ? "PATCH" : "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
@@ -346,7 +371,7 @@ export default function FreeBoardForm({
       const id = isEdit ? initial?.id : data.id;
       if (typeof id !== "number") {
         setBusy(false);
-        router.replace("/community");
+        router.replace(board.pageBase);
         return;
       }
       postId = id;
@@ -359,6 +384,7 @@ export default function FreeBoardForm({
       return;
     }
     const result = await uploadFreeBoardPhotos(postId, pendingRef.current, {
+      apiBase: board.apiBase,
       onItem: patchItem,
       onProgress: (done, totalN) => setProgress({ done, total: totalN }),
     });
@@ -370,7 +396,7 @@ export default function FreeBoardForm({
     setBusy(false);
     if (result.failed > 0) {
       setNote(
-        `가배치표 글은 저장되었지만 사진 ${result.failed}장이 업로드되지 않았습니다. 실패한 사진만 다시 올리거나, 사진 없이 완료할 수 있습니다.`
+        `${board.partialSavedNoun}은 저장되었지만 사진 ${result.failed}장이 업로드되지 않았습니다. 실패한 사진만 다시 올리거나, 사진 없이 완료할 수 있습니다.`
       );
       return;
     }
@@ -391,7 +417,7 @@ export default function FreeBoardForm({
         ? `실패한 사진 ${failedCount}장 다시 올리기`
         : isEdit
           ? "수정"
-          : "가배치표 올리기";
+          : board.submitLabel;
 
   return (
     <form ref={formRef} onSubmit={onSubmit} className="course-report-form free-board-form">
@@ -400,7 +426,7 @@ export default function FreeBoardForm({
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="예: 11월 2일(월) 가배치표"
+          placeholder={board.titlePlaceholder}
           required
           maxLength={FREE_BOARD_TITLE_MAX}
         />
@@ -410,7 +436,7 @@ export default function FreeBoardForm({
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder="안내 사항 (변경·주의 사항 등)"
+          placeholder={board.bodyPlaceholder}
           required
           maxLength={FREE_BOARD_BODY_MAX}
         />
@@ -428,7 +454,7 @@ export default function FreeBoardForm({
                 className={`course-report-photo-item${marked ? " free-board-photo-marked" : ""}`}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={freeBoardPhotoSrc(initial!.id, photo.id)} alt="" className="is-revealed" />
+                <img src={`${board.apiBase}/${initial!.id}/photos/${photo.id}`} alt="" className="is-revealed" />
                 <button
                   type="button"
                   className="course-report-photo-remove"
@@ -553,7 +579,7 @@ export default function FreeBoardForm({
             사진 없이 완료
           </button>
         ) : (
-          <a href={isEdit ? `/community/${initial?.id}` : "/community"} className="ui-btn ui-btn-ghost">
+          <a href={isEdit ? `${board.pageBase}/${initial?.id}` : board.pageBase} className="ui-btn ui-btn-ghost">
             취소
           </a>
         )}

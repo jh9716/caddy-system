@@ -1,4 +1,9 @@
 import { FREE_BOARD_LABEL, isFreeBoardEnabled } from "@/lib/freeBoardConstants";
+import {
+  COMMUNITY_FREE_BOARD_LABEL,
+  COMMUNITY_FREE_BOARD_PATH,
+  isCommunityFreeBoardEnabled,
+} from "@/lib/communityBoardConstants";
 /**
  * 관리자 좌측/드로어 메뉴. 화면 이동만 정의한다.
  * route 삭제·redirect·권한 변경 없음.
@@ -163,6 +168,16 @@ export const ADMIN_MAIN_NAV: readonly AdminNavItem[] = [
           href: "/community",
           label: FREE_BOARD_LABEL,
           match: (p: string) => pathStartsWith(p, "/community"),
+        },
+      ]
+    : []),
+  // 커뮤니티 자유게시판 (/talk): 가배치표 다음. 기존 메뉴 순서는 그대로.
+  ...(isCommunityFreeBoardEnabled()
+    ? [
+        {
+          href: COMMUNITY_FREE_BOARD_PATH,
+          label: COMMUNITY_FREE_BOARD_LABEL,
+          match: (p: string) => pathStartsWith(p, COMMUNITY_FREE_BOARD_PATH),
         },
       ]
     : []),

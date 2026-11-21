@@ -7437,3 +7437,282 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 .caddy-ops-roster-banner.is-error { color: #b45309; background: #fffbeb; border: 1px solid #fde68a; }
 .caddy-ops-roster-note.is-error { color: #b45309; font-weight: 600; }
 [data-stale] .caddy-ops-roster-names, [data-stale] .caddy-home-stat-value { opacity: .7; }
+
+/* ——— 커뮤니티 자유게시판 V1 (/talk). 목록형(네이버 카페 자유게시판 형태), 기존 VERTHILL 색·버튼 재사용 ——— */
+.talk-page {
+  max-width: 760px;
+}
+.talk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  min-width: 0;
+}
+.talk-head .ui-page-title {
+  margin: 0;
+  min-width: 0;
+}
+.talk-write-btn {
+  flex-shrink: 0;
+  min-height: 40px;
+  padding: 8px 14px;
+}
+.talk-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.talk-search-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  font-size: 16px; /* iOS 확대 방지 + 가독성 */
+}
+.talk-search-btn {
+  flex-shrink: 0;
+  min-height: 40px;
+  min-width: 56px;
+}
+.talk-result-note {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--vh-ink-soft);
+}
+.talk-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 2px solid var(--vh-green-900);
+  background: var(--vh-paper);
+}
+.talk-list > li {
+  border-bottom: 1px solid var(--vh-border);
+}
+.talk-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 52px;
+  padding: 9px 4px;
+  color: var(--vh-ink);
+  text-decoration: none;
+}
+.talk-row:hover,
+.talk-row:focus-visible {
+  background: var(--vh-ivory);
+}
+.talk-row-title {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 1.4;
+}
+.talk-row-title-text {
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.talk-photo-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-self: center;
+  color: var(--vh-green-800);
+}
+.talk-comment-count {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--vh-danger);
+}
+.talk-row-meta,
+.talk-article-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  font-size: 12px;
+  color: var(--vh-muted);
+}
+.talk-row-meta > * + *::before,
+.talk-article-meta > * + *::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--vh-border-strong);
+}
+.talk-row-author {
+  color: var(--vh-ink-soft);
+  font-weight: 600;
+}
+.talk-row.is-skeleton,
+.talk-row.is-skeleton:hover {
+  background: none;
+}
+.talk-list .is-skeleton {
+  padding: 10px 4px;
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.talk-skel-search {
+  flex: 1;
+  height: 40px;
+  border-radius: var(--vh-radius-sm);
+}
+.talk-skel-title {
+  height: 14px;
+  width: 70%;
+}
+.talk-skel-meta {
+  height: 10px;
+  width: 35%;
+}
+.talk-state {
+  padding: 28px 12px;
+  text-align: center;
+  border-top: 2px solid var(--vh-green-900);
+  border-bottom: 1px solid var(--vh-border);
+  background: var(--vh-paper);
+}
+.talk-state-title {
+  margin: 0 0 4px;
+  font-weight: 700;
+  color: var(--vh-ink);
+}
+.talk-state-desc {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--vh-muted);
+}
+.talk-state.is-error .talk-state-title {
+  color: var(--vh-danger);
+}
+.talk-pager {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 14px 0 6px;
+}
+.talk-page-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 6px;
+  border-radius: var(--vh-radius-sm);
+  font-size: 14px;
+  color: var(--vh-ink-soft);
+  text-decoration: none;
+}
+.talk-page-link.is-current {
+  background: var(--vh-green-900);
+  color: #fff;
+  font-weight: 700;
+}
+.talk-page-link.is-disabled {
+  color: var(--vh-border-strong);
+}
+.talk-touch {
+  min-height: 44px;
+  min-width: 44px;
+}
+.talk-back {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  margin-bottom: 4px;
+  font-size: 14px;
+  color: var(--vh-ink-soft);
+  text-decoration: none;
+}
+.talk-form-title {
+  margin: 0 0 12px;
+}
+.talk-article {
+  border-top: 2px solid var(--vh-green-900);
+  padding-top: 12px;
+  margin-bottom: 18px;
+}
+.talk-article-head {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--vh-border);
+}
+.talk-article-title {
+  margin: 0 0 6px;
+  font-size: 18px;
+  line-height: 1.4;
+  font-weight: 700;
+  color: var(--vh-ink);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.talk-article-body {
+  padding: 14px 2px;
+  white-space: pre-wrap;
+  line-height: 1.7;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.talk-photos {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.talk-photo {
+  display: block;
+  border-radius: var(--vh-radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--vh-border);
+  background: var(--vh-ivory);
+}
+.talk-photo img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 80vh;
+  object-fit: contain;
+}
+.talk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--vh-border);
+}
+@media (min-width: 768px) {
+  .talk-row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 46px;
+    padding: 8px 10px;
+  }
+  .talk-row-title-text {
+    -webkit-line-clamp: 1;
+  }
+  .talk-row-meta {
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+  }
+  .talk-row-author {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

@@ -1,5 +1,10 @@
 import type { AppRole } from "@/lib/sessionCookies";
 import { FREE_BOARD_LABEL, isFreeBoardEnabled } from "@/lib/freeBoardConstants";
+import {
+  COMMUNITY_FREE_BOARD_LABEL,
+  COMMUNITY_FREE_BOARD_PATH,
+  isCommunityFreeBoardEnabled,
+} from "@/lib/communityBoardConstants";
 
 /**
  * /board · /notice 는 캐디 공용 화면이다. 관리자 셸(사이드바/햄버거)은 admin만 재사용한다.
@@ -38,6 +43,16 @@ export function memberNavItems() {
             href: "/community",
             label: FREE_BOARD_LABEL,
             match: (p: string) => p.startsWith("/community"),
+          },
+        ] as const)
+      : []),
+    // 커뮤니티 자유게시판 (/talk): 가배치표 다음. 기존 메뉴 순서는 그대로.
+    ...(isCommunityFreeBoardEnabled()
+      ? ([
+          {
+            href: COMMUNITY_FREE_BOARD_PATH,
+            label: COMMUNITY_FREE_BOARD_LABEL,
+            match: (p: string) => p === COMMUNITY_FREE_BOARD_PATH || p.startsWith(`${COMMUNITY_FREE_BOARD_PATH}/`),
           },
         ] as const)
       : []),

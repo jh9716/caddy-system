@@ -63,6 +63,7 @@
     "test:free-board-unit": "bash scripts/tsx-safe.sh scripts/test-free-board-unit.ts",
     "test:free-board-clipboard-paste-unit": "bash scripts/tsx-safe.sh scripts/test-free-board-clipboard-paste-unit.ts",
     "test:free-board-clipboard-paste-chromium": "bash scripts/tsx-safe.sh scripts/test-free-board-clipboard-paste-chromium.ts",
+    "test:community-board-unit": "bash scripts/tsx-safe.sh scripts/test-community-board-unit.ts",
     "test:chat-preview-env-unit": "bash scripts/tsx-safe.sh scripts/test-chat-preview-env-unit.ts",
     "test:preview-db-workflow-unit": "node scripts/test-preview-db-workflow-unit.cjs",
     "test:floating-chat-unit": "bash scripts/tsx-safe.sh scripts/test-floating-chat-unit.ts",
