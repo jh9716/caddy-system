@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FreeBoardCommentPublic } from "@/lib/freeBoardComments";
 import { consumeUnauthorizedMemberResponse } from "@/lib/memberSessionRedirect";
 import { liveCommentCount } from "@/lib/boardCommentsState";
@@ -11,18 +11,28 @@ export default function FreeBoardComments({
   initialComments,
   canCompose,
   apiBase = "/api/free-board",
+  onLiveCountChange,
 }: {
   postId: number;
   initialComments: FreeBoardCommentPublic[];
   canCompose: boolean;
   /** 댓글 API 기준 경로. 기본 = 가배치표. 자유게시판은 /api/talk. */
   apiBase?: string;
+  /**
+   * 살아있는 댓글 수가 바뀔 때 알림 (선택). 자유게시판 상세 상단 "댓글 N" 동기화용.
+   * 넘기지 않으면(가배치표 기본) 아무 동작도 하지 않는다.
+   */
+  onLiveCountChange?: (liveCount: number) => void;
 }) {
   const [comments, setComments] = useState(initialComments);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const liveCount = useMemo(() => liveCommentCount(comments), [comments]);
   const base = `${apiBase}/${postId}/comments`;
+
+  useEffect(() => {
+    if (onLiveCountChange) onLiveCountChange(liveCount);
+  }, [liveCount, onLiveCountChange]);
 
   async function reload() {
     const res = await fetch(base, { credentials: "include", cache: "no-store" }).catch(() => null);

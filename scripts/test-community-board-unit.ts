@@ -69,10 +69,12 @@ async function main() {
   delete process.env.FREE_BOARD_STORAGE_ENV;
   const mem = createMemoryCourseReportPhotoStore();
   const storeCalls: string[] = [];
+  const storeFault = { put: false };
   const spy: CourseReportPhotoStore = {
     ...mem,
     async put(k, b, m) {
       storeCalls.push(`put:${k}`);
+      if (storeFault.put) throw new Error("mock storage down");
       return mem.put(k, b, m);
     },
     async delete(k) {
@@ -331,6 +333,67 @@ async function main() {
       assert(thread != null, "댓글 thread 종류 = COMMUNITY_POST (가배치표 FREE_BOARD_POST 와 분리)");
     }
 
+    section("댓글 수 일치: 상단(서버 count)·목록·댓글 영역(liveCount) — 등록·수정·삭제 후 항상 같음");
+    {
+      const { liveCommentCount } = await import("../src/lib/boardCommentsState");
+      const cpost = (cookie: string, body: unknown) =>
+        comments.POST(req(`http://local/api/talk/${postL}/comments`, { method: "POST", headers: H(cookie), body: JSON.stringify(body) }), idP(postL));
+      const cdel = (cookie: string, cid: number) =>
+        commentOne.DELETE(req(`http://local/api/talk/${postL}/comments/${cid}`, { method: "DELETE", headers: { cookie } }), commentP(postL, cid));
+      const counts = async () => {
+        const header = (await lib.countCommunityComments(prisma, [postL])).get(postL) ?? 0;
+        const listed = (await json(await listAs(L))).posts.find((p: { id: number }) => p.id === postL)?.commentCount ?? -1;
+        const area = liveCommentCount((await json(await comments.GET(req(`http://local/api/talk/${postL}/comments`, { headers: { cookie: L } }), idP(postL)))).comments);
+        return { header, listed, area };
+      };
+      const same = (c: { header: number; listed: number; area: number }, n: number) => c.header === n && c.listed === n && c.area === n;
+      let c = await counts();
+      assert(same(c, 0), `처음: 상단·목록·영역 모두 0 (${JSON.stringify(c)})`);
+      const root = await json(await cpost(B, { body: "수 확인 댓글" }));
+      const reply = await json(await cpost(A, { body: "수 확인 답글", parentId: root.comment.id }));
+      c = await counts();
+      assert(same(c, 2), `댓글+답글 등록 후 모두 2 (${JSON.stringify(c)})`);
+      await commentOne.PATCH(
+        req(`http://local/api/talk/${postL}/comments/${root.comment.id}`, { method: "PATCH", headers: H(B), body: JSON.stringify({ body: "수정됨" }) }),
+        commentP(postL, root.comment.id)
+      );
+      c = await counts();
+      assert(same(c, 2), `댓글 수정 후에도 모두 2 (${JSON.stringify(c)})`);
+      assert((await cdel(A, reply.comment.id)).status === 200, "답글 작성자 삭제 200");
+      c = await counts();
+      assert(same(c, 1), `답글 삭제 후 모두 1 (${JSON.stringify(c)})`);
+      assert((await cdel(B, root.comment.id)).status === 200, "원댓글 작성자 삭제 200");
+      c = await counts();
+      assert(same(c, 0), `댓글·답글 모두 삭제 후 모두 0 — 새로고침 시 상단도 0 (${JSON.stringify(c)})`);
+      const again = await json(await cpost(L, { body: "다시 댓글" }));
+      c = await counts();
+      assert(same(c, 1), `삭제 뒤 다시 등록 시 모두 1 (${JSON.stringify(c)})`);
+      assert((await cdel(ADM, again.comment.id)).status === 200, "관리자 댓글 삭제 200");
+      c = await counts();
+      assert(same(c, 0), `관리자 삭제 후 모두 0 (${JSON.stringify(c)})`);
+      // 원댓글 먼저 삭제(답글 남김) → 원댓글은 '삭제된 댓글' 자리표시로만 남고 숫자에서 빠짐
+      const r2 = await json(await cpost(B, { body: "원댓글2" }));
+      await cpost(A, { body: "답글2", parentId: r2.comment.id });
+      assert((await cdel(B, r2.comment.id)).status === 200, "원댓글 먼저 삭제 200");
+      c = await counts();
+      assert(same(c, 1), `원댓글만 삭제(답글 남음) → 모두 1 (${JSON.stringify(c)})`);
+    }
+
+    section("상세 화면 상단 댓글 수가 댓글 영역 숫자와 같은 상태를 씀 (소스 확인)");
+    {
+      const fs = await import("node:fs");
+      const page = fs.readFileSync("src/app/talk/[id]/page.tsx", "utf8");
+      const cc = fs.readFileSync("src/app/talk/[id]/TalkCommentCount.tsx", "utf8");
+      const fbc = fs.readFileSync("src/app/community/[id]/FreeBoardComments.tsx", "utf8");
+      const fbPage = fs.readFileSync("src/app/community/[id]/page.tsx", "utf8");
+      assert(page.includes("<TalkCommentCountProvider initialCount={post.commentCount}>"), "상세: 서버 count 로 시작하는 공용 상태");
+      assert(page.includes("<TalkCommentCountLabel") && !page.includes("<span>댓글 {post.commentCount}</span>"), "상단은 고정 숫자가 아니라 공용 상태 표시");
+      assert(page.includes("<TalkComments") && !page.includes("<FreeBoardComments"), "댓글 영역은 공용 상태를 갱신하는 래퍼 사용");
+      assert(cc.includes("onLiveCountChange={ctx?.setCount}"), "댓글 영역 liveCount → 상단 숫자 갱신");
+      assert(/if \(onLiveCountChange\) onLiveCountChange\(liveCount\)/.test(fbc), "알림은 콜백을 넘긴 경우에만 (가배치표 기본 동작 그대로)");
+      assert(!fbPage.includes("onLiveCountChange") && !fbPage.includes("TalkComment"), "가배치표 상세는 새 콜백·래퍼 미사용");
+    }
+
     section("사진: 작성자 업로드, 형식·용량·장수 서버 검증");
     const upload = (cookie: string, id: number, body: FormData | Uint8Array, headers: Record<string, string> = {}) =>
       photos.POST(
@@ -355,6 +418,16 @@ async function main() {
     big.set(png(4), 0);
     assert((await upload(A, postA, photoForm(big))).status === 413, "3MB 초과 413");
     assert((await upload(A, postA, photoForm([png(5), png(6)]))).status === 400, "한 요청에 여러 장 → 거부");
+    {
+      const before = await prisma.communityPhoto.count({ where: { postId: postA } });
+      storeFault.put = true;
+      const failed = await upload(A, postA, photoForm(png(7)));
+      storeFault.put = false;
+      const fj = await json(failed);
+      assert(failed.status === 502 && fj.error === "storage_put_failed", `저장소 오류 → 502 안내 (${failed.status})`);
+      assert(typeof fj.message === "string" && !/token|secret|blob/i.test(fj.message), "오류 문구에 내부 정보 없음");
+      assert((await prisma.communityPhoto.count({ where: { postId: postA } })) === before, "저장 실패 시 DB 행 생성 안 됨");
+    }
     const key = "0f8fad5b-d9cb-469f-a165-70867728950e";
     const dupA = await json(await upload(A, postA, photoForm(jpeg(), key)));
     const dupB = await upload(A, postA, photoForm(jpeg(), key));
@@ -382,6 +455,12 @@ async function main() {
       assert((await get(R, postA, photo1)).status === 401, "퇴사 캐디 사진 401");
       assert((await get(B, postL, photo1)).status === 404, "다른 글 id 로 사진 접근 404");
       // 가배치표 글/사진 준비 (가배치표는 관리자만 작성)
+      // 새 로컬 DB 에서는 두 게시판 id 가 우연히 같아(모두 1) 분리 확인이 무의미해짐 → 로컬 테스트 DB 의 가배치표 id 시퀀스만 앞으로 이동.
+      for (const t of ["FreeBoardPost", "FreeBoardPhoto"]) {
+        await prisma.$executeRawUnsafe(
+          `SELECT setval(pg_get_serial_sequence('"${t}"', 'id'), GREATEST((SELECT COALESCE(MAX(id), 0) FROM "${t}"), 100000))`
+        );
+      }
       const fbCreate = await fbList.POST(
         req("http://local/api/free-board", { method: "POST", headers: H(ADM), body: JSON.stringify({ title: "가배치표", body: "운영" }) })
       );
@@ -494,7 +573,7 @@ async function main() {
       assert(Array.isArray(pct.posts), "특수문자 검색 안전");
       assert(lib.normalizeCommunitySearch("a".repeat(80)).length === 50, "검색어 50자 제한");
       const fbSearch = await json(await listAs(ADM, `?q=${encodeURIComponent("가배치표")}`));
-      assert(!fbSearch.posts.some((p: { id: number }) => fbPostIds.includes(p.id) && p.title === "가배치표"), "자유게시판 검색에 가배치표 글 없음");
+      assert(!fbSearch.posts.some((p: { id: number; title: string }) => fbPostIds.includes(p.id) && p.title === "가배치표"), "자유게시판 검색에 가배치표 글 없음");
     }
 
     section("삭제: 본인 또는 관리자 (관리자 = 부적절한 글 관리)");

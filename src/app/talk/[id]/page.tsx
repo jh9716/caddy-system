@@ -11,7 +11,7 @@ import {
 import { COMMUNITY_FREE_BOARD_API, COMMUNITY_FREE_BOARD_PATH } from "@/lib/communityBoardConstants";
 import { listCommunityPhotos } from "@/lib/communityBoardPhoto";
 import { canComposeCommentAs, listCommunityComments } from "@/lib/communityBoardComments";
-import FreeBoardComments from "@/app/community/[id]/FreeBoardComments";
+import { TalkCommentCountLabel, TalkCommentCountProvider, TalkComments } from "./TalkCommentCount";
 import TalkPhotoGallery from "./TalkPhotoGallery";
 import TalkDetailActions from "./TalkDetailActions";
 import { formatTalkDetailTime } from "../talkTime";
@@ -35,6 +35,7 @@ export default async function TalkDetailPage({ params }: { params: Promise<{ id:
   const moderatorOnly = post.canDelete && !post.isMine;
 
   return (
+    <TalkCommentCountProvider initialCount={post.commentCount}>
     <div className="course-report-page talk-page talk-detail">
       <Link href={COMMUNITY_FREE_BOARD_PATH} className="talk-back">
         ‹ 자유게시판
@@ -46,7 +47,7 @@ export default async function TalkDetailPage({ params }: { params: Promise<{ id:
             <span className="talk-row-author">{post.authorDisplayName}</span>
             <time dateTime={post.createdAt}>{formatTalkDetailTime(post.createdAt)}</time>
             {post.edited ? <span>수정됨</span> : null}
-            <span>댓글 {post.commentCount}</span>
+            <TalkCommentCountLabel fallback={post.commentCount} />
           </p>
         </header>
         <div className="talk-article-body">{post.body}</div>
@@ -58,12 +59,13 @@ export default async function TalkDetailPage({ params }: { params: Promise<{ id:
           moderatorOnly={moderatorOnly}
         />
       </article>
-      <FreeBoardComments
+      <TalkComments
         postId={post.id}
         initialComments={comments}
         canCompose={canCompose}
         apiBase={COMMUNITY_FREE_BOARD_API}
       />
     </div>
+    </TalkCommentCountProvider>
   );
 }
