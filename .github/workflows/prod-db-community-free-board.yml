@@ -135,6 +135,15 @@ jobs:
           DATABASE_URL: postgresql://placeholder:placeholder@127.0.0.1:1/placeholder
         run: npm ci --no-audit --no-fund
 
+      - name: Verify pinned local tsx (no download, no DB access)
+        run: |
+          set -eu
+          test -x node_modules/.bin/tsx || { echo "local tsx missing after npm ci; refusing (no download)"; exit 1; }
+          want="$(node -p 'require("./package.json").devDependencies.tsx')"
+          got="$(node -p 'require("./node_modules/tsx/package.json").version')"
+          [ "$want" = "4.23.15" ] && [ "$got" = "$want" ] || { echo "tsx version mismatch (want=$want got=$got); refusing"; exit 1; }
+          echo "local tsx $got"
+
       - name: Run guarded script (single run, no retry)
         env:
           DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
@@ -152,4 +161,5 @@ jobs:
             export PROD_MAINTENANCE_CONFIRM=COMMUNITY_FREE_BOARD_V1_MIGRATE_20261121
           fi
           set -o pipefail
-          npx tsx scripts/maintenance/deploy-community-free-board-migration.ts 2>&1 | sed -E 's#postgres(ql)?://[^ ]+#<url>#g'
+          test -x node_modules/.bin/tsx || { echo "local tsx missing; refusing"; exit 1; }
+          ./node_modules/.bin/tsx scripts/maintenance/deploy-community-free-board-migration.ts 2>&1 | sed -E 's#postgres(ql)?://[^ ]+#<url>#g'
