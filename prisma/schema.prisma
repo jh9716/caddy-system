@@ -317,6 +317,8 @@ model User {
   comments Comment[]
   /// 자유게시판 V1 작성 이력. User 물리 삭제는 Restrict.
   freeBoardPosts FreeBoardPost[] @relation("FreeBoardPostAuthor")
+  /// 커뮤니티 자유게시판 작성 이력. User 물리 삭제는 Restrict.
+  communityPosts CommunityPost[] @relation("CommunityPostAuthor")
   createdAt DateTime @default(now())
 }
 
@@ -372,6 +374,8 @@ enum CommentTargetType {
   NOTICE
   /// 자유게시판 V1 게시글 댓글. targetKey = FreeBoardPost.id
   FREE_BOARD_POST
+  /// 커뮤니티 자유게시판 게시글 댓글. targetKey = CommunityPost.id. 가배치표(FREE_BOARD_POST)와 분리.
+  COMMUNITY_POST
 }
 
 /// 대상당 thread 1개. GET empty 는 thread 를 만들지 않음.
@@ -1255,6 +1259,48 @@ model FreeBoardPhoto {
   id         Int           @id @default(autoincrement())
   postId     Int
   post       FreeBoardPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  storageKey String        @unique
+  mimeType   String
+  size       Int
+  sortOrder  Int           @default(0)
+  createdAt  DateTime      @default(now())
+
+  @@index([postId, sortOrder])
+}
+
+/// 커뮤니티 게시판 종류. 이번 V1 은 FREE(자유게시판)만 사용.
+/// 기존 가배치표(FreeBoardPost/FreeBoardPhoto)와는 별도 테이블이다 (기존 행 변경·재분류 없음).
+/// 향후 갤러리·투표게시판은 값 추가로 확장 가능 (이번 PR 에서는 미구현).
+enum CommunityBoardType {
+  FREE
+}
+
+/// 커뮤니티 자유게시판 게시글 (관리자·조장·캐디 작성). 가배치표와 데이터·API·사진 분리.
+model CommunityPost {
+  id                Int                @id @default(autoincrement())
+  boardType         CommunityBoardType @default(FREE)
+  authorUserId      Int
+  author            User               @relation("CommunityPostAuthor", fields: [authorUserId], references: [id], onDelete: Restrict)
+  /// 작성 시점 표시명 snapshot (Caddy.name 우선, 없으면 username).
+  authorDisplayName String
+  title             String
+  body              String
+  deletedAt         DateTime?
+  /// soft delete 한 User.id (본인 삭제 또는 관리자 삭제 기록). FK 없음.
+  deletedByUserId   Int?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  photos            CommunityPhoto[]
+
+  @@index([boardType, deletedAt, createdAt])
+  @@index([authorUserId])
+}
+
+/// 커뮤니티 게시글 사진. storageKey 는 community/<board>/<postId>/<uuid>.<ext> 전용 prefix.
+model CommunityPhoto {
+  id         Int           @id @default(autoincrement())
+  postId     Int
+  post       CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
   storageKey String        @unique
   mimeType   String
   size       Int

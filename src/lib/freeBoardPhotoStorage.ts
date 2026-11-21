@@ -226,17 +226,29 @@ export type FreeBoardStoreResult =
   | { ok: false; code: string; message: string };
 
 export function getFreeBoardPhotoStore(env: Env = process.env): FreeBoardStoreResult {
+  return getIsolatedBoardPhotoStore(guardFreeBoardStore, env);
+}
+
+/**
+ * 같은 격리 정책(Preview 전용 저장소 fail-closed / Production 공용 저장소)을 쓰되,
+ * key prefix 가드는 호출한 게시판이 정한다. 가배치표는 guardFreeBoardStore(free-board/),
+ * 커뮤니티 자유게시판은 자체 가드(community/free/)를 넘긴다 → 서로의 객체에 접근 불가.
+ */
+export function getIsolatedBoardPhotoStore(
+  guard: (inner: CourseReportPhotoStore) => CourseReportPhotoStore,
+  env: Env = process.env
+): FreeBoardStoreResult {
   const d = resolveFreeBoardStorageDecision(env);
   if (!d.ok) return d;
   if (d.mode === "dedicated") {
     const store = testFactory
       ? testFactory.dedicated()
       : dedicatedBlobStore(String(env[FREE_BOARD_BLOB_TOKEN_ENV]).trim());
-    return { ok: true, mode: "dedicated", store: guardFreeBoardStore(store) };
+    return { ok: true, mode: "dedicated", store: guard(store) };
   }
   const store = testFactory ? testFactory.shared() : getCourseReportPhotoStore();
   if (!store.configured) {
     return { ok: false, code: "storage_not_configured", message: "사진 저장소가 설정되지 않았습니다." };
   }
-  return { ok: true, mode: "shared", store: guardFreeBoardStore(store) };
+  return { ok: true, mode: "shared", store: guard(store) };
 }

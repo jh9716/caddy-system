@@ -40,6 +40,8 @@ export async function uploadFreeBoardPhotos(
   items: FreeBoardUploadItem[],
   opts: {
     post?: typeof fetch;
+    /** 업로드 API 기준 경로. 기본 = 가배치표 /api/free-board. */
+    apiBase?: string;
     onItem?: (key: string, patch: Partial<FreeBoardUploadItem>) => void;
     onProgress?: (done: number, total: number) => void;
   } = {}
@@ -60,7 +62,7 @@ export async function uploadFreeBoardPhotos(
     fd.append("file", it.blob, `photo-${i}.${ext}`);
     let res: Response;
     try {
-      res = await post(`/api/free-board/${postId}/photos`, {
+      res = await post(`${opts.apiBase ?? "/api/free-board"}/${postId}/photos`, {
         method: "POST",
         credentials: "include",
         headers: { "X-Upload-Key": it.uploadKey },
