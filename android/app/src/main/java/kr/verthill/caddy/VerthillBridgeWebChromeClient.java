@@ -1,11 +1,16 @@
 package kr.verthill.caddy;
 
 import android.app.Activity;
-import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
+import androidx.core.content.FileProvider;
 import android.webkit.MimeTypeMap;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -15,6 +20,7 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeWebChromeClient;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -22,7 +28,9 @@ import java.util.concurrent.Executors;
 
 /**
  * Image file-chooser intercept: HEIC/HEIF become cache JPEGs before WebView
- * sees them. Dialogs, permissions, fullscreen, and console stay on the parent.
+ * sees them. On 자유게시판 / 가배치표 pages the same chooser also offers the
+ * camera (ACTION_IMAGE_CAPTURE into an app-private cache file, no CAMERA
+ * permission). Dialogs, permissions, fullscreen, and console stay on the parent.
  */
 public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
 
@@ -34,6 +42,8 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private ValueCallback<Uri[]> pendingCallback;
     private int nativePreviewSession;
+    private File pendingCameraFile;
+    private Uri pendingCameraUri;
 
     public VerthillBridgeWebChromeClient(Bridge bridge) {
         super(bridge);
@@ -66,6 +76,8 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
             pendingCallback.onReceiveValue(null);
             pendingCallback = null;
         }
+        discardPendingCamera(true);
+        cleanupStaleCameraFiles(bridge.getContext());
         pendingCallback = filePathCallback;
         nativePreviewSession += 1;
 
@@ -74,28 +86,136 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
         }
         applyAcceptMimeTypes(intent, fileChooserParams.getAcceptTypes());
+
+        Intent launchIntent = intent;
+        String pageUrl = webView != null ? webView.getUrl() : null;
+        if (CameraChooserPolicy.allowsCameraForUrl(pageUrl)) {
+            Intent capture = buildCameraCaptureIntent(bridge.getContext());
+            if (capture != null) {
+                launchIntent = Intent.createChooser(intent, null);
+                launchIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[] { capture });
+            }
+        }
         try {
-            imagePickerLauncher.launch(intent);
-        } catch (ActivityNotFoundException e) {
+            imagePickerLauncher.launch(launchIntent);
+        } catch (RuntimeException e) {
+            // Camera chooser could not start: fall back to the plain gallery / files picker.
+            if (launchIntent != intent) {
+                discardPendingCamera(true);
+                try {
+                    imagePickerLauncher.launch(intent);
+                    return true;
+                } catch (RuntimeException ignored) {
+                    // fall through to cancel
+                }
+            }
             pendingCallback = null;
             filePathCallback.onReceiveValue(null);
         }
         return true;
     }
 
+    /**
+     * ACTION_IMAGE_CAPTURE writing into cache/camera-capture/ via FileProvider.
+     * Returns null (gallery / files only) when no camera app or the file cannot be prepared.
+     */
+    private Intent buildCameraCaptureIntent(Context context) {
+        if (context == null) return null;
+        try {
+            Intent capture = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            PackageManager pm = context.getPackageManager();
+            List<ResolveInfo> cameras = pm.queryIntentActivities(capture, PackageManager.MATCH_DEFAULT_ONLY);
+            if (cameras == null || cameras.isEmpty()) return null;
+            File dir = new File(context.getCacheDir(), CameraChooserPolicy.CAMERA_DIR_NAME);
+            if (!dir.isDirectory() && !dir.mkdirs()) return null;
+            File file = new File(dir, CameraChooserPolicy.cameraFileName(System.currentTimeMillis()));
+            Uri uri = FileProvider.getUriForFile(context, context.getPackageName() + ".fileprovider", file);
+            int grant = Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION;
+            capture.putExtra(MediaStore.EXTRA_OUTPUT, uri);
+            capture.setClipData(ClipData.newRawUri("", uri));
+            capture.addFlags(grant);
+            for (ResolveInfo info : cameras) {
+                if (info.activityInfo == null) continue;
+                context.grantUriPermission(info.activityInfo.packageName, uri, grant);
+            }
+            pendingCameraFile = file;
+            pendingCameraUri = uri;
+            return capture;
+        } catch (RuntimeException e) {
+            discardPendingCamera(true);
+            return null;
+        }
+    }
+
+    /** Revoke the camera write grant; optionally delete the temp file. */
+    private void discardPendingCamera(boolean deleteFile) {
+        Uri uri = pendingCameraUri;
+        File file = pendingCameraFile;
+        pendingCameraUri = null;
+        pendingCameraFile = null;
+        revokeCameraGrant(uri);
+        if (deleteFile && file != null) {
+            // Best-effort.
+            file.delete();
+        }
+    }
+
+    private void revokeCameraGrant(Uri uri) {
+        if (uri == null) return;
+        try {
+            bridge.getContext().revokeUriPermission(
+                uri,
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION
+            );
+        } catch (RuntimeException ignored) {
+            // Best-effort.
+        }
+    }
+
+    private static void cleanupStaleCameraFiles(Context context) {
+        if (context == null) return;
+        File dir = new File(context.getCacheDir(), CameraChooserPolicy.CAMERA_DIR_NAME);
+        File[] files = dir.listFiles();
+        if (files == null) return;
+        long now = System.currentTimeMillis();
+        for (File file : files) {
+            if (file.isFile() && CameraChooserPolicy.isStale(file.lastModified(), now)) {
+                file.delete();
+            }
+        }
+    }
+
     private void onImagePickerResult(ActivityResult result) {
         final ValueCallback<Uri[]> callback = pendingCallback;
         pendingCallback = null;
-        if (callback == null) return;
-        if (result.getResultCode() != Activity.RESULT_OK) {
+        final File cameraFile = pendingCameraFile;
+        final Uri cameraUri = pendingCameraUri;
+        pendingCameraFile = null;
+        pendingCameraUri = null;
+        revokeCameraGrant(cameraUri);
+        if (callback == null) {
+            if (cameraFile != null) cameraFile.delete();
+            return;
+        }
+        boolean resultOk = result.getResultCode() == Activity.RESULT_OK;
+        Uri[] returned = resultOk ? urisFromResult(result.getData()) : null;
+        int returnedCount = countNonNull(returned);
+        boolean returnedIsCameraOnly =
+            cameraUri != null && returnedCount == 1 && cameraUri.equals(firstNonNull(returned));
+        long cameraBytes = cameraFile != null && cameraFile.isFile() ? cameraFile.length() : 0L;
+        CameraChooserPolicy.Source source =
+            CameraChooserPolicy.decide(resultOk, returnedCount, returnedIsCameraOnly, cameraBytes);
+        if (source != CameraChooserPolicy.Source.CAMERA && cameraFile != null) {
+            // Gallery / files pick or cancel: the camera temp file is not used.
+            cameraFile.delete();
+        }
+        if (source == CameraChooserPolicy.Source.CANCEL) {
             callback.onReceiveValue(null);
             return;
         }
-        final Uri[] picked = urisFromResult(result.getData());
-        if (picked == null || picked.length == 0) {
-            callback.onReceiveValue(null);
-            return;
-        }
+        final Uri[] picked = source == CameraChooserPolicy.Source.CAMERA
+            ? new Uri[] { cameraUri }
+            : nonNull(returned);
         final Activity activity = bridge.getActivity();
         final int sessionId = nativePreviewSession;
         convertExecutor.execute(() -> {
@@ -212,6 +332,34 @@ public class VerthillBridgeWebChromeClient extends BridgeWebChromeClient {
         final String js = HeicNativePreview.hqFailedJs(previewId, sessionId);
         if (js == null) return;
         activity.runOnUiThread(() -> webView.evaluateJavascript(js, null));
+    }
+
+    private static int countNonNull(Uri[] uris) {
+        if (uris == null) return 0;
+        int count = 0;
+        for (Uri uri : uris) {
+            if (uri != null) count += 1;
+        }
+        return count;
+    }
+
+    private static Uri firstNonNull(Uri[] uris) {
+        if (uris == null) return null;
+        for (Uri uri : uris) {
+            if (uri != null) return uri;
+        }
+        return null;
+    }
+
+    private static Uri[] nonNull(Uri[] uris) {
+        Uri[] out = new Uri[countNonNull(uris)];
+        int i = 0;
+        if (uris != null) {
+            for (Uri uri : uris) {
+                if (uri != null) out[i++] = uri;
+            }
+        }
+        return out;
     }
 
     static Uri[] urisFromResult(Intent data) {

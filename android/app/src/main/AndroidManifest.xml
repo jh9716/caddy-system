@@ -3,6 +3,10 @@
 
     <queries>
         <package android:name="com.kakao.talk" />
+        <!-- '+ 사진' chooser camera option (no camera permission; output goes to app cache). -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
     </queries>
 
     <application

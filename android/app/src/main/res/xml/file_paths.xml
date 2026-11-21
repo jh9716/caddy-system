@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- HEIC→JPEG cache only. System picker content:// URIs are not FileProvider. -->
+    <!-- App cache subdirectories only. System picker content:// URIs are not FileProvider. -->
     <cache-path name="heic_jpeg" path="heic-jpeg/" />
+    <!-- '+ 사진' camera capture output only (cache/camera-capture/). -->
+    <cache-path name="camera_capture" path="camera-capture/" />
 </paths>
