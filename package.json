@@ -20,6 +20,7 @@
     "tsx:safe": "bash scripts/tsx-safe.sh",
     "test:db-safety-unit": "bash scripts/tsx-safe.sh scripts/test-db-safety-unit.ts",
     "test:team-affiliation-prod-maint-unit": "bash scripts/tsx-safe.sh scripts/test-team-affiliation-prod-maint-unit.ts",
+    "test:community-free-board-prod-maint-unit": "bash scripts/tsx-safe.sh scripts/test-community-free-board-prod-maint-unit.ts",
     "test:roster-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-unit.ts",
     "test:caddy-roster-board-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-roster-board-unit.ts",
     "test:caddy-manage-unit": "bash scripts/tsx-safe.sh scripts/test-caddy-manage-unit.ts",
@@ -278,6 +279,7 @@
     "eslint": "^9.37.0",
     "eslint-config-next": "^15.5.4",
     "prisma": "^5.22.0",
+    "tsx": "4.23.15",
     "typescript": "^5.6.2"
   },
   "prisma": {
