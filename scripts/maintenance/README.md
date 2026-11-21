@@ -90,6 +90,25 @@ Neon backup / recovery (console, not this script):
 2. Confirm history retention / PITR window covers the migrate time. Set `NEON_PITR_WINDOW_CONFIRMED=YES` only after that console check.
 3. If rollback is needed: Restore to a timestamp **before** migrate, onto a new branch, verify fingerprints, then cut over. Do not `prisma migrate resolve` to fake success.
 
+Community free board V1 (`CommunityPost` / `CommunityPhoto` / `CommunityBoardType`, `CommentTargetType.COMMUNITY_POST`, additive, no seed). **main 병합 금지 · 사용자 별도 승인 전 실행 금지.** Preview는 이미 적용됨. 순서: precheck(읽기 전용) → Neon 콘솔 PITR 확인 + 백업 브랜치 `backup-pre-pr380-prod-YYYYMMDD` → migrate(1회, 재시도 없음) → 앱(PR #380) 배포.
+
+```
+PROD_DB_MODE=precheck \
+PROD_MAINTENANCE_CONFIRM=COMMUNITY_FREE_BOARD_V1_PRECHECK_20261121 \
+PROD_DB_CONFIRM="PROD-DB-PRECHECK morning-tooth-60659454 20261120160000_community_free_board_v1" \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+npx tsx scripts/maintenance/deploy-community-free-board-migration.ts
+
+PROD_DB_MODE=migrate \
+PROD_MAINTENANCE_CONFIRM=COMMUNITY_FREE_BOARD_V1_MIGRATE_20261121 \
+PROD_DB_CONFIRM="PROD-DB-MIGRATE morning-tooth-60659454 20261120160000_community_free_board_v1" \
+NEON_PITR_WINDOW_CONFIRMED=YES NEON_BACKUP_BRANCH=backup-pre-pr380-prod-YYYYMMDD \
+DATABASE_URL="$PRODUCTION_DATABASE_URL" \
+npx tsx scripts/maintenance/deploy-community-free-board-migration.ts
+```
+
+GitHub: `.github/workflows/prod-db-community-free-board.yml` (workflow_dispatch 전용, environment `production-db` 필수 승인 jh9716, environment secret `PRODUCTION_DATABASE_URL`). guard job이 environment 존재·보호 규칙을 먼저 확인하고 없으면 중단한다 (environment 생성·secret 등록은 사용자 작업). 차단 조건: 대기 migration이 정확히 대상 1개가 아님, 실패·롤백·중복 기록, DB에만 있는 migration, 적용된 migration checksum 불일치, 대상 checksum ≠ 코드 고정값, 기록 없이 새 객체 존재, Preview/pooler/다른 endpoint, 모드·확인 문구 불일치. 사후: 새 테이블·인덱스·FK·enum 값, 새 테이블 0행, 기존 테이블(User, Caddy, DailyBoardPublished, FreeBoardPost, FreeBoardPhoto, CommentThread, Comment) 실행 전 행 지문 불변, `_prisma_migrations` checksum 일치. No db push / migrate reset / resolve / seed.
+
 ChatAttachment Photo V1 production schema:
 
 ```

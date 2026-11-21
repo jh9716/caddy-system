@@ -1,0 +1,155 @@
+# VERTHILL Production DB — 커뮤니티 자유게시판 V1 migration 전용
+# (Neon morning-tooth-60659454 / ep-crimson-cell-a1i1tpce / neondb, 대상 20261120160000_community_free_board_v1)
+#
+# ⚠️ main 병합 금지 · 실행 금지 (사용자 별도 승인 전).
+# - workflow_dispatch 전용. push/PR/schedule 등 자동 트리거 없음.
+# - 모드 분리: precheck(읽기 전용) / migrate(prisma migrate deploy 1회). 확인 문구가 모드마다 다르다.
+# - guard job 이 GitHub Environment "production-db" 가 이미 존재하고 jh9716 필수 승인 규칙이 있는지 먼저 확인한다.
+#   (없는 environment 를 job 이 참조하면 GitHub 가 보호 규칙 없이 자동 생성하므로, 확인 전에는 참조하지 않는다.)
+# - DB 비밀값은 environment secret PRODUCTION_DATABASE_URL 하나만 사용. 저장소 공용 secrets.DATABASE_URL 은 쓰지 않는다.
+# - reset / db push / resolve / seed / --force 없음. 실패 시 자동 재시도 없음.
+name: Production DB migrate — community free board v1 (manual only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: precheck | migrate
+        required: true
+        type: choice
+        options: [precheck, migrate]
+      confirm:
+        description: 'Exact phrase: PROD-DB-<MODE> morning-tooth-60659454 20261120160000_community_free_board_v1'
+        required: true
+        type: string
+      pitr_confirmed:
+        description: 'migrate only: Neon console PITR window checked (YES)'
+        required: true
+        type: choice
+        default: "NO"
+        options: ["NO", "YES"]
+      backup_branch:
+        description: 'migrate only: Neon backup branch name (backup-pre-pr380-prod-YYYYMMDD)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prod-db-community-free-board-v1
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check mode, confirmation phrase, ref and actor
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+          PITR: ${{ inputs.pitr_confirmed }}
+          BACKUP_BRANCH: ${{ inputs.backup_branch }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          EVENT: ${{ github.event_name }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -eu
+          [ "$EVENT" = "workflow_dispatch" ] || { echo "manual dispatch only"; exit 1; }
+          case "$MODE" in precheck|migrate) ;; *) echo "invalid mode"; exit 1;; esac
+          upper="$(printf '%s' "$MODE" | tr '[:lower:]' '[:upper:]')"
+          expected="PROD-DB-${upper} morning-tooth-60659454 20261120160000_community_free_board_v1"
+          if [ "$CONFIRM" != "$expected" ]; then echo "confirmation phrase mismatch for mode $MODE"; exit 1; fi
+          if [ "$REF_TYPE" != "branch" ]; then echo "must run from a branch"; exit 1; fi
+          case "$REF_NAME" in
+            main) ;;
+            prod-db-migrate-community-free-board-20261121) ;;
+            *) echo "ref not allowed"; exit 1;;
+          esac
+          if [ "$GITHUB_REPOSITORY" != "jh9716/caddy-system" ]; then echo "unexpected repository"; exit 1; fi
+          if [ "$ACTOR" != "jh9716" ] || [ "$TRIGGERING_ACTOR" != "jh9716" ]; then echo "only jh9716 may dispatch"; exit 1; fi
+          if [ "$MODE" = "migrate" ]; then
+            [ "$PITR" = "YES" ] || { echo "migrate requires pitr_confirmed=YES"; exit 1; }
+            printf '%s' "$BACKUP_BRANCH" | grep -Eq '^backup-pre-pr380-prod-20[0-9]{6}$' || { echo "migrate requires backup_branch backup-pre-pr380-prod-YYYYMMDD"; exit 1; }
+          fi
+          echo "mode=$MODE ref=$REF_NAME sha=$GITHUB_SHA"
+
+      - name: Require existing protected environment production-db (fail closed)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          code="$(curl -sS -o env.json -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/environments/production-db")"
+          if [ "$code" != "200" ]; then echo "environment production-db missing or unreadable (HTTP $code); refusing"; exit 1; fi
+          node -e '
+            const e = require("./env.json");
+            const rules = Array.isArray(e.protection_rules) ? e.protection_rules : [];
+            const rr = rules.find((r) => r.type === "required_reviewers");
+            const logins = rr && Array.isArray(rr.reviewers) ? rr.reviewers.map((x) => x.reviewer && x.reviewer.login) : [];
+            if (e.name !== "production-db") { console.log("unexpected environment name"); process.exit(1); }
+            if (!logins.includes("jh9716")) { console.log("production-db has no required reviewer jh9716; refusing"); process.exit(1); }
+            if (!e.deployment_branch_policy) { console.log("production-db has no deployment branch policy; refusing"); process.exit(1); }
+            console.log("production-db protected: reviewers=" + logins.join(","));
+          '
+          rm -f env.json
+
+  prod-db:
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production-db
+    env:
+      PRISMA_HIDE_UPDATE_MESSAGE: "1"
+      CHECKPOINT_DISABLE: "1"
+    steps:
+      - name: Re-check mode and confirmation phrase
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -eu
+          case "$MODE" in precheck|migrate) ;; *) echo "invalid mode"; exit 1;; esac
+          upper="$(printf '%s' "$MODE" | tr '[:lower:]' '[:upper:]')"
+          [ "$CONFIRM" = "PROD-DB-${upper} morning-tooth-60659454 20261120160000_community_free_board_v1" ] || { echo "confirmation phrase mismatch"; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+
+      - name: Install dependencies (no DB access)
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@127.0.0.1:1/placeholder
+        run: npm ci --no-audit --no-fund
+
+      - name: Run guarded script (single run, no retry)
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PROD_DB_MODE: ${{ inputs.mode }}
+          PROD_DB_CONFIRM: ${{ inputs.confirm }}
+          NEON_PITR_WINDOW_CONFIRMED: ${{ inputs.pitr_confirmed }}
+          NEON_BACKUP_BRANCH: ${{ inputs.backup_branch }}
+        run: |
+          set +x
+          set -eu
+          [ -n "${DATABASE_URL:-}" ] || { echo "PRODUCTION_DATABASE_URL environment secret missing"; exit 1; }
+          if [ "$PROD_DB_MODE" = "precheck" ]; then
+            export PROD_MAINTENANCE_CONFIRM=COMMUNITY_FREE_BOARD_V1_PRECHECK_20261121
+          else
+            export PROD_MAINTENANCE_CONFIRM=COMMUNITY_FREE_BOARD_V1_MIGRATE_20261121
+          fi
+          set -o pipefail
+          npx tsx scripts/maintenance/deploy-community-free-board-migration.ts 2>&1 | sed -E 's#postgres(ql)?://[^ ]+#<url>#g'
