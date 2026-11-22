@@ -105,8 +105,8 @@ assert(
   "capacitor.config.ts Release URL/hosts unchanged"
 );
 assert(
-  appGradle.includes("versionCode 15") && appGradle.includes('versionName "1.0.10"'),
-  "versionCode 15 / 1.0.10 frozen"
+  appGradle.includes("versionCode 16") && appGradle.includes('versionName "1.0.11"'),
+  "versionCode 16 / 1.0.11 frozen"
 );
 {
   const buildTypes = appGradle.slice(appGradle.indexOf("    buildTypes {"));
