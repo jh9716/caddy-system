@@ -195,15 +195,66 @@ async function main() {
   );
   assert(!filePaths.includes("external-path"), "no broad external-path");
   assert(!filePaths.includes('path="."'), "no cache/external root path");
+  {
+    const paths = Array.from(filePaths.matchAll(/<([a-z-]+-path)\s+name="([^"]+)"\s+path="([^"]*)"/g)).map(
+      (m) => `${m[1]}:${m[2]}:${m[3]}`
+    );
+    assert(
+      JSON.stringify(paths) ===
+        JSON.stringify(["cache-path:heic_jpeg:heic-jpeg/", "cache-path:camera_capture:camera-capture/"]),
+      "FileProvider exposes only cache/heic-jpeg and cache/camera-capture"
+    );
+  }
+
+  console.log("== '+ 사진' chooser camera option ==");
+  const cameraPolicy = read("android/app/src/main/java/kr/verthill/caddy/CameraChooserPolicy.java");
+  assert(!/android\.permission\.CAMERA/.test(manifest) && !manifest.includes("CAMERA"), "no CAMERA permission");
+  assert(
+    manifest.includes('<action android:name="android.media.action.IMAGE_CAPTURE" />') &&
+      manifest.includes('<package android:name="com.kakao.talk" />'),
+    "queries: IMAGE_CAPTURE intent added, KakaoTalk kept"
+  );
+  assert(
+    chromeClient.includes("MediaStore.ACTION_IMAGE_CAPTURE") &&
+      chromeClient.includes("MediaStore.EXTRA_OUTPUT") &&
+      chromeClient.includes("Intent.createChooser(intent, null)") &&
+      chromeClient.includes("Intent.EXTRA_INITIAL_INTENTS") &&
+      chromeClient.includes("CameraChooserPolicy.allowsCameraForUrl") &&
+      chromeClient.includes("CameraChooserPolicy.CAMERA_DIR_NAME") &&
+      chromeClient.includes("revokeUriPermission") &&
+      chromeClient.includes("cleanupStaleCameraFiles"),
+    "image chooser wraps gallery/files with a camera capture initial intent"
+  );
+  assert(
+    chromeClient.includes("imagePickerLauncher.launch(intent);") &&
+      chromeClient.includes("Camera chooser could not start"),
+    "camera chooser failure falls back to the plain gallery / files picker"
+  );
+  assert(
+    cameraPolicy.includes('CAMERA_DIR_NAME = "camera-capture"') &&
+      cameraPolicy.includes('"/talk", "/community"') &&
+      cameraPolicy.includes('".jpg"'),
+    "camera only on /talk and /community, JPEG into cache/camera-capture"
+  );
+  assert(
+    chromeClient.includes("fileChooserParams.isCaptureEnabled()") &&
+      chromeClient.includes("super.onShowFileChooser("),
+    "capture-attribute / non-image inputs still use Capacitor"
+  );
   assert(
     heicConverter.includes('CACHE_DIR_NAME = "heic-jpeg"') &&
       heicConverter.includes("FileProvider.getUriForFile"),
     "HEIC converter is the FileProvider producer"
   );
   assert(
-    !chromeClient.includes("FileProvider") &&
+    (chromeClient.match(/FileProvider\.getUriForFile\(/g) ?? []).length === 1 &&
+      chromeClient.includes(
+        "new File(context.getCacheDir(), CameraChooserPolicy.CAMERA_DIR_NAME)"
+      ) &&
+      !chromeClient.includes("getExternalFilesDir") &&
+      !chromeClient.includes("getExternalStorage") &&
       chromeClient.includes("HeicNativeJpegConverter"),
-    "chrome client does not expose extra FileProvider roots"
+    "chrome client uses FileProvider only for the cache/camera-capture output file"
   );
   assert(
     !read("src/app/chat/ChatClient.tsx").includes("capture=") &&
