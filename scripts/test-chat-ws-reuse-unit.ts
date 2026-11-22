@@ -22,6 +22,7 @@ import {
   parseWsReuseRuntimeResponse,
   resolveChatWsReuse,
   resolveChatWsReuseRuntime,
+  shouldAwaitParkRuntimeCheck,
   shouldParkChatWsReuse,
   type ParkedSocketMeta,
 } from "../src/lib/chatWsReuse";
@@ -241,7 +242,10 @@ async function main() {
   assert(client.includes("dropParkedRoomSocket();"), "logout/session reset drops parked socket");
   assert(client.includes("subscribeChatSessionReset"), "session reset subscription present");
   assert(client.includes("leaveRoomSocket();"), "leave parks only when enabled");
-  assert(client.includes("await refreshWsReuseRuntime()"), "park re-checks runtime API first");
+  assert(shouldAwaitParkRuntimeCheck(true) === false, "known-on runtime does not delay park");
+  assert(shouldAwaitParkRuntimeCheck(false) === true, "unknown runtime still awaits kill switch");
+  assert(client.includes("shouldAwaitParkRuntimeCheck"), "park skips wait when runtime already on");
+  assert(client.includes("await refreshWsReuseRuntime()"), "unknown runtime still awaits kill switch");
   assert(client.includes("CHAT_WS_REUSE_RUNTIME_POLL_MS"), "open tabs poll after Instant Rollback");
   assert(client.includes("fetchChatWsReuseRuntimeEnabled"), "runtime fetch is fail-closed");
   assert(client.includes("wsRef.current !== ws"), "park aborts if the tab opened another room");

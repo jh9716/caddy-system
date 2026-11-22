@@ -7,6 +7,9 @@ import LogoutButton from "@/components/LogoutButton";
 import AccountDeletionLink from "@/components/AccountDeletionLink";
 import PrivacyPolicyLink from "@/components/PrivacyPolicyLink";
 import { registerAndroidDrawerClose } from "@/lib/androidSystemBack";
+import { warmChatPhotoMediaConnection } from "@/lib/chatClientConfig";
+import { shouldPrefetchChatToken, shouldWarmChatWorkerOnShell } from "@/lib/chatEntrySpeed";
+import { prefetchChatTokenIfNeeded, readReusableChatToken } from "@/lib/chatFastEntry";
 
 export type AppChromeNavItem = {
   href: string;
@@ -137,6 +140,7 @@ export default function AppChrome({
 
   useEffect(() => {
     document.body.classList.add("manage-mode");
+    if (shouldWarmChatWorkerOnShell()) warmChatPhotoMediaConnection();
 
     const toPrefetch = (prefetchHrefs ?? navItems.map((item) => item.href)).filter(
       (href) => href !== pathname && href !== "#menu"
@@ -146,6 +150,14 @@ export default function AppChrome({
     const run = () => {
       if (cancelled) return;
       for (const href of toPrefetch) router.prefetch(href);
+      if (
+        shouldPrefetchChatToken({
+          pathname,
+          hasReusableToken: Boolean(readReusableChatToken()),
+        })
+      ) {
+        void prefetchChatTokenIfNeeded();
+      }
     };
 
     let idleId: number | undefined;
