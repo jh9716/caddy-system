@@ -13,6 +13,13 @@ import {
 } from '@/lib/noticeConstants'
 import { isFutureNoticeStart, planNoticeClientAutoPush } from '@/lib/noticeAutoPushPlan'
 import { requestNoticePushSend } from '@/lib/noticePushClient'
+import {
+  computeNoticePublishWindow,
+  initialNoticePublishForm,
+  toNoticeDate,
+  type NoticePublishFormState,
+} from '@/lib/noticePublishWindow'
+import NoticePublishWindowFields from '@/components/notice/NoticePublishWindowFields'
 import { DRIVING_POOL_TEAM, PRIMARY_TEAMS } from '@/lib/caddyManage'
 import {
   NOTICE_PHOTO_ACCEPT,
@@ -68,14 +75,6 @@ type Props = {
   }
 }
 
-function toDatetimeLocalValue(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const dt = new Date(iso)
-  if (Number.isNaN(dt.getTime())) return ''
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`
-}
-
 function pushResultMessage(push: {
   ok?: boolean
   skipped?: string | null
@@ -110,12 +109,11 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   const [pinned, setPinned] = useState(Boolean(initial?.pinned))
   const [targetType, setTargetType] = useState(initial?.targetType ?? NOTICE_TARGET_ALL)
   const [targetValue, setTargetValue] = useState(initial?.targetValue ?? '')
-  const [publishStartAt, setPublishStartAt] = useState(
-    toDatetimeLocalValue(initial?.publishStartAt)
+  const [publishForm, setPublishForm] = useState<NoticePublishFormState>(() =>
+    initialNoticePublishForm(initial?.publishStartAt, initial?.publishEndAt)
   )
-  const [publishEndAt, setPublishEndAt] = useState(
-    toDatetimeLocalValue(initial?.publishEndAt)
-  )
+  // 수정 화면에서 게시 기간을 건드리지 않으면 기존 값을 보내지 않는다 (의도치 않은 변경 방지).
+  const [publishTouched, setPublishTouched] = useState(false)
   const [sendPush, setSendPush] = useState(mode !== 'edit')
   const [busy, setBusy] = useState(false)
   const [statusNote, setStatusNote] = useState('')
@@ -137,7 +135,17 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   )
   const [pendingFiles, setPendingFiles] = useState<NoticePendingFile[]>([])
   const isEdit = mode === 'edit'
-  const scheduled = isFutureNoticeStart(publishStartAt || null)
+  const publishResult = computeNoticePublishWindow(publishForm)
+  const sendPublishWindow = !isEdit || publishTouched
+  const untouchedPublishWindow = sendPublishWindow
+    ? null
+    : {
+        publishStartAt: toNoticeDate(initial?.publishStartAt),
+        publishEndAt: toNoticeDate(initial?.publishEndAt),
+      }
+  const effectivePublishWindow =
+    untouchedPublishWindow ?? (publishResult.ok ? publishResult.window : null)
+  const scheduled = isFutureNoticeStart(effectivePublishWindow?.publishStartAt ?? null)
   busyRef.current = busy
   existingCountRef.current = existingPhotos.length
   const totalPhotos = existingPhotos.length + pending.length
@@ -362,6 +370,10 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (submitLock.current || busy) return
+    if (sendPublishWindow && !publishResult.ok) {
+      setStatusNote(publishResult.message)
+      return
+    }
     submitLock.current = true
     busyRef.current = true
     setBusy(true)
@@ -393,7 +405,7 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         sendPushRequested: sendPush && !scheduled,
         pendingPhotoCount: currentPending.length,
         pendingFileCount: pendingFiles.length,
-        publishStartAt: publishStartAt || null,
+        publishStartAt: effectivePublishWindow?.publishStartAt ?? null,
       })
       const payload = {
         title,
@@ -404,8 +416,12 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         targetType,
         targetValue:
           targetType === NOTICE_TARGET_ALL ? null : targetValue || null,
-        publishStartAt: publishStartAt ? new Date(publishStartAt).toISOString() : null,
-        publishEndAt: publishEndAt ? new Date(publishEndAt).toISOString() : null,
+        ...(sendPublishWindow && publishResult.ok
+          ? {
+              publishStartAt: publishResult.window.publishStartAt?.toISOString() ?? null,
+              publishEndAt: publishResult.window.publishEndAt?.toISOString() ?? null,
+            }
+          : {}),
         sendPush: plan.sendOnCreate,
       }
 
@@ -736,22 +752,16 @@ export default function NewNoticeForm({ mode = 'new', initial }: Props) {
         />
         상단고정
       </label>
-      <label className="notice-field">
-        <span>게시 시작일 (선택)</span>
-        <input
-          type="datetime-local"
-          value={publishStartAt}
-          onChange={(e) => setPublishStartAt(e.target.value)}
-        />
-      </label>
-      <label className="notice-field">
-        <span>게시 종료일 (선택)</span>
-        <input
-          type="datetime-local"
-          value={publishEndAt}
-          onChange={(e) => setPublishEndAt(e.target.value)}
-        />
-      </label>
+      <NoticePublishWindowFields
+        value={publishForm}
+        onChange={(next) => {
+          setPublishForm(next)
+          setPublishTouched(true)
+        }}
+        result={publishResult}
+        untouchedWindow={untouchedPublishWindow}
+        disabled={busy}
+      />
       {scheduled ? (
         <p className="notice-scheduled-push-hint" role="status">
           {NOTICE_SCHEDULED_PUSH_HINT}

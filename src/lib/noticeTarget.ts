@@ -114,15 +114,21 @@ export function parseNoticePublishWindow(input: {
   } = {};
   if (publishStartAt !== undefined) out.publishStartAt = publishStartAt;
   if (publishEndAt !== undefined) out.publishEndAt = publishEndAt;
-  const start = publishStartAt === undefined ? undefined : publishStartAt;
-  const end = publishEndAt === undefined ? undefined : publishEndAt;
+  assertNoticePublishOrder(publishStartAt, publishEndAt);
+  return out;
+}
+
+/** 시작·종료가 모두 있을 때만 비교. 한쪽만 있거나 둘 다 없으면 통과. */
+export function assertNoticePublishOrder(
+  start: Date | null | undefined,
+  end: Date | null | undefined
+) {
   if (start && end && start.getTime() > end.getTime()) {
     throw new NoticeValidationError(
       "invalid_window",
       "게시 시작일이 종료일보다 늦을 수 없습니다."
     );
   }
-  return out;
 }
 
 /** PATCH/POST both accept schema `content` and legacy form `body`. */
