@@ -144,6 +144,7 @@ section("viewer component wiring");
   assert(v.includes('passive: false') && v.includes("preventDefault"), "브라우저 확대·스크롤 대신 직접 처리");
   assert(v.includes("history.pushState") && v.includes("popstate") && v.includes("history.back()"), "뒤로 가기 = 뷰어만 닫기");
   assert(!/pushState\([^)]*,\s*""\s*,/.test(v), "주소(URL)는 바꾸지 않음");
+  assert(v.includes("...prev, [PHOTO_ZOOM_HISTORY_KEY]: token"), "기존 history.state(Next 내부 값)를 보존");
   assert(v.includes('style.overflow = "hidden"') && v.includes("prevBody"), "열린 동안만 뒤 화면 스크롤 잠금, 닫으면 복원");
   assert(!v.includes("scrollTo("), "스크롤 위치를 건드리지 않음");
   assert(!v.includes('addEventListener("wheel"') && !v.includes("onWheel"), "PC 마우스 휠 확대 없음 (이번 범위 제외)");

@@ -152,7 +152,12 @@ export default function PhotoZoomViewer({ src, alt = "", onClose }: Props) {
     closedByHistoryRef.current = false;
     if (!isPhotoZoomHistoryState(window.history.state, token)) {
       try {
-        window.history.pushState({ [PHOTO_ZOOM_HISTORY_KEY]: token }, "");
+        // 기존 state(Next.js 내부 값 포함)를 그대로 두고 표시만 더함 → 주소·화면 그대로.
+        const prev =
+          window.history.state && typeof window.history.state === "object"
+            ? (window.history.state as Record<string, unknown>)
+            : {};
+        window.history.pushState({ ...prev, [PHOTO_ZOOM_HISTORY_KEY]: token }, "");
       } catch {
         // history 를 못 쓰면 닫기 버튼만 사용.
       }
