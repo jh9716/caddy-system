@@ -21,6 +21,43 @@ import { INACTIVE_EMPLOYMENT_WARNING_CODE } from "../src/lib/assignableRoster";
 import type { AutoAssignmentRow } from "../src/lib/autoAssignEngine";
 import { POST as confirmPOST } from "../src/app/api/assignments/confirm/route";
 import { assertLocalDatabaseUrl } from "./assertLocalDatabaseUrl";
+import {
+  SESSION_COOKIE_NAME,
+  buildSessionClaims,
+  signSessionClaims,
+} from "../src/lib/sessionCookies";
+
+/** 테스트 전용 고정 서명 비밀값 — 운영 SESSION_SECRET 을 읽거나 쓰지 않는다. */
+const TEST_SESSION_SECRET = "assignment-confirm-test-only-secret-32chars!!";
+
+/**
+ * 테스트 전용 SESSION_SECRET 으로 fn 실행 후 이전 값을 그대로 복원한다.
+ * (기존 값은 읽어서 출력하지 않고 복원용으로만 보관)
+ */
+async function withTestSessionSecret<T>(fn: () => Promise<T>): Promise<T> {
+  const had = Object.prototype.hasOwnProperty.call(process.env, "SESSION_SECRET");
+  const prev = process.env.SESSION_SECRET;
+  process.env.SESSION_SECRET = TEST_SESSION_SECRET;
+  try {
+    return await fn();
+  } finally {
+    if (had) process.env.SESSION_SECRET = prev;
+    else delete process.env.SESSION_SECRET;
+  }
+}
+
+/** 운영 로그인과 같은 방식(signSessionClaims)으로 서명한 env 관리자 세션 쿠키 */
+async function signedEnvAdminCookie(): Promise<string> {
+  const token = await signSessionClaims(
+    buildSessionClaims({
+      userId: null,
+      username: "admin",
+      role: "admin",
+      sessionVersion: 0,
+    })
+  );
+  return `${SESSION_COOKIE_NAME}=${token}`;
+}
 
 let passed = 0;
 let failed = 0;
@@ -385,24 +422,45 @@ async function runDbTests() {
       const rows: AutoAssignmentRow[] = [
         sampleRow({ caddyId: c1.id, date: date3, teeTime: "07:00" }),
       ];
-      const req = new NextRequest("http://localhost/api/assignments/confirm", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          cookie: "role=admin; session_role=admin",
-        },
-        body: JSON.stringify({
-          status: "CONFIRMED",
-          date: date3,
-          assignments: rows,
-        }),
+      const confirmBody = JSON.stringify({
+        status: "CONFIRMED",
+        date: date3,
+        assignments: rows,
       });
-      const res = await confirmPOST(req);
-      const body = await res.json();
-      assert(res.status === 200, "admin confirm 200");
-      assert(body.status === "APPLIED", "API APPLIED");
-      const n = await prisma.schedule.count({ where: { date: date3Obj } });
-      assert(n === 1, "API wrote schedule");
+
+      await withTestSessionSecret(async () => {
+        // 보안: 서명 없는 예전 가짜 관리자 쿠키는 거절되고 아무것도 저장되지 않아야 한다.
+        const legacyReq = new NextRequest("http://localhost/api/assignments/confirm", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie: "role=admin; session_role=admin",
+          },
+          body: confirmBody,
+        });
+        const legacyRes = await confirmPOST(legacyReq);
+        assert(legacyRes.status === 401, "unsigned legacy admin cookie → 401");
+        const legacyBody = await legacyRes.json();
+        assert(legacyBody.error === "unauthorized", "legacy cookie unauthorized body");
+        const n0 = await prisma.schedule.count({ where: { date: date3Obj } });
+        assert(n0 === 0, "legacy cookie wrote nothing");
+
+        // 정상: 운영과 같은 방식으로 서명된 관리자 세션
+        const req = new NextRequest("http://localhost/api/assignments/confirm", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            cookie: await signedEnvAdminCookie(),
+          },
+          body: confirmBody,
+        });
+        const res = await confirmPOST(req);
+        const body = await res.json();
+        assert(res.status === 200, "admin confirm 200");
+        assert(body.status === "APPLIED", "API APPLIED");
+        const n = await prisma.schedule.count({ where: { date: date3Obj } });
+        assert(n === 1, "API wrote schedule");
+      });
     }
 
     // final cleanup
