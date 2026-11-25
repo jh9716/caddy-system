@@ -331,15 +331,40 @@ section("author grouping / date / jump");
     prevSentAt: "2026-10-04T01:09:00.000Z",
   });
   assert(!same, "grouped same author hides header");
+  // 날짜 구분선은 기기 로컬 시간대 기준(chatDateKey). 테스트 시각을 실행 TZ 의 로컬 시각으로
+  // 만들어 KST/UTC/LA 어디서 돌려도 같은 의미를 검증한다 (UTC 고정 문자열 의존 제거).
+  const localIso = (y: number, mo: number, d: number, h: number, mi = 0) =>
+    new Date(y, mo - 1, d, h, mi).toISOString();
+  const localDayOf = (iso: string) => {
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
   assert(
-    shouldShowDateDivider("2026-10-03T15:00:00.000Z", "2026-10-04T01:00:00.000Z"),
+    shouldShowDateDivider(localIso(2026, 10, 3, 23, 50), localIso(2026, 10, 4, 0, 10)),
     "new local day shows divider"
   );
   assert(
-    !shouldShowDateDivider("2026-10-04T01:00:00.000Z", "2026-10-04T08:00:00.000Z") ||
-      chatDateKey("2026-10-04T01:00:00.000Z") === chatDateKey("2026-10-04T08:00:00.000Z"),
+    !shouldShowDateDivider(localIso(2026, 10, 4, 0, 10), localIso(2026, 10, 4, 23, 50)),
     "same local day no duplicate divider"
   );
+  assert(
+    chatDateKey(localIso(2026, 10, 4, 0, 10)) === "2026-10-04" &&
+      chatDateKey(localIso(2026, 10, 3, 23, 50)) === "2026-10-03",
+    "chatDateKey uses device-local calendar day"
+  );
+  {
+    // 고정 UTC 시각 쌍: 결과가 실행 TZ 의 로컬 날짜(Date getter, 독립 계산)와 일치해야 함.
+    const a = "2026-10-03T15:00:00.000Z";
+    const b = "2026-10-04T01:00:00.000Z";
+    assert(
+      shouldShowDateDivider(a, b) === (localDayOf(a) !== localDayOf(b)) &&
+        chatDateKey(a) === localDayOf(a) &&
+        chatDateKey(b) === localDayOf(b),
+      "fixed UTC instants follow local day in any TZ"
+    );
+  }
+  assert(!shouldShowDateDivider(null, ""), "empty current time shows no divider");
+  assert(shouldShowDateDivider(null, localIso(2026, 10, 4, 9)), "first message shows divider");
   assert(isNearChatBottom({ scrollHeight: 1000, scrollTop: 960, clientHeight: 50 }), "near bottom");
   assert(
     !isNearChatBottom({ scrollHeight: 1000, scrollTop: 10, clientHeight: 50 }),
