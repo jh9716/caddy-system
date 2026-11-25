@@ -461,6 +461,106 @@ section("worker protocol");
   assert(!bad.ok, "empty body still rejected");
 }
 
+// ─── mention polling detector ─────────────────────────────────────────
+const MENTION_FETCH_MARKER = /mention|\/api\/chat\/users|chatDirectoryMembersUrl/i;
+
+/** src[openIdx] === open 인 위치부터 짝이 맞는 닫는 괄호까지 (문자열/주석 단순 무시). */
+function balancedFrom(src: string, openIdx: number, open: string, close: string): string {
+  let depth = 0;
+  for (let i = openIdx; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === open) depth++;
+    else if (ch === close) {
+      depth--;
+      if (depth === 0) return src.slice(openIdx, i + 1);
+    }
+  }
+  return src.slice(openIdx);
+}
+
+/** 같은 파일 안의 `const name =` / `function name(` 정의 본문 (첫 { } 블록). */
+function definitionBody(src: string, name: string): string {
+  const re = new RegExp(`(?:const|let|function)\\s+${name}\\b`);
+  const m = re.exec(src);
+  if (!m) return "";
+  const brace = src.indexOf("{", m.index);
+  if (brace < 0) return "";
+  return balancedFrom(src, brace, "{", "}");
+}
+
+/** 타이머 콜백 + 콜백이 부르는 같은 파일 함수(1단계)까지 포함한 텍스트. */
+function timerCallbackScope(src: string, args: string): string {
+  const callees = new Set<string>();
+  for (const m of args.matchAll(/\b([A-Za-z_$][\w$]*)\s*\(/g)) callees.add(m[1]);
+  const bare = /^\(\s*([A-Za-z_$][\w$]*)\s*,/.exec(args);
+  if (bare) callees.add(bare[1]);
+  let scope = args;
+  for (const name of callees) {
+    if (/^(setInterval|setTimeout|void|async|await|if|for|while|return)$/.test(name)) continue;
+    scope += "\n" + definitionBody(src, name);
+  }
+  return scope;
+}
+
+/**
+ * 멘션 조회를 반복하는 타이머를 찾는다.
+ * - setInterval: 콜백(또는 1단계 호출 함수)이 멘션 조회를 부르면 polling.
+ * - setTimeout: 멘션 조회 + 타이머 재예약(setTimeout)이 같이 있으면 polling 루프.
+ */
+function findMentionPollingTimers(src: string): string[] {
+  const found: string[] = [];
+  for (const m of src.matchAll(/\bset(Interval|Timeout)\s*\(/g)) {
+    const open = (m.index ?? 0) + m[0].length - 1;
+    const args = balancedFrom(src, open, "(", ")");
+    const scope = timerCallbackScope(src, args);
+    if (!MENTION_FETCH_MARKER.test(scope)) continue;
+    const line = src.slice(0, m.index).split("\n").length;
+    if (m[1] === "Interval") found.push(`setInterval@${line}`);
+    else if (/\bsetTimeout\s*\(/.test(scope.slice(1))) found.push(`setTimeout-loop@${line}`);
+  }
+  return found;
+}
+
+section("mention polling detector self-check");
+{
+  const wsReuse = `
+  const refreshWsReuseRuntime = async (): Promise<boolean> => {
+    const enabled = await fetchChatWsReuseRuntimeEnabled({ fetch: window.fetch.bind(window) });
+    return applyRuntimeParkState(enabled);
+  };
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void refreshWsReuseRuntime();
+    }, CHAT_WS_REUSE_RUNTIME_POLL_MS);
+    return () => window.clearInterval(id);
+  }, []);`;
+  assert(findMentionPollingTimers(wsReuse).length === 0, "detector: WS reuse runtime interval allowed");
+  const oneShot = `const t = window.setTimeout(() => setMentionSuppressed(false), 300);`;
+  assert(findMentionPollingTimers(oneShot).length === 0, "detector: one-shot mention UI timeout allowed");
+  const direct = `
+  const id = window.setInterval(() => {
+    void ensureMentionCandidates();
+  }, 3000);`;
+  assert(findMentionPollingTimers(direct).length === 1, "detector: interval → ensureMentionCandidates caught");
+  const api = `setInterval(async () => { const r = await fetch("/api/chat/users?scope=all"); }, 5000);`;
+  assert(findMentionPollingTimers(api).length === 1, "detector: interval → /api/chat/users caught");
+  const members = `setInterval(() => { void fetch(chatDirectoryMembersUrl(roomId, token)); }, 5000);`;
+  assert(findMentionPollingTimers(members).length === 1, "detector: interval → directory members caught");
+  const indirect = `
+  const pollPeople = () => {
+    void ensureMentionCandidates();
+  };
+  const id = setInterval(pollPeople, 4000);`;
+  assert(findMentionPollingTimers(indirect).length === 1, "detector: interval via named callback caught");
+  const loop = `
+  const tick = () => {
+    void ensureMentionCandidates();
+    timerRef.current = window.setTimeout(tick, 5000);
+  };
+  timerRef.current = window.setTimeout(tick, 5000);`;
+  assert(findMentionPollingTimers(loop).length >= 1, "detector: recursive setTimeout mention loop caught");
+}
+
 section("source wiring");
 {
   const client = read("src/app/chat/ChatClient.tsx");
@@ -482,7 +582,14 @@ section("source wiring");
   assert(client.includes("멘션 목록 불러오는 중"), "candidate fetch shows loading");
   assert(client.includes("/api/chat/users?scope=all"), "all-room candidates reuse users API");
   assert(client.includes("chatDirectoryMembersUrl"), "custom room uses members");
-  assert(!client.includes("setInterval"), "no mention polling");
+  // 멘션 후보 조회(/api/chat/users, directory members, ensureMentionCandidates)가
+  // 타이머로 반복 실행되면 실패. 다른 목적의 setInterval(예: WS 재사용 kill-switch
+  // 런타임 확인 #352)은 멘션 조회를 부르지 않으므로 허용.
+  const mentionPolls = findMentionPollingTimers(client);
+  assert(
+    mentionPolls.length === 0,
+    `no mention polling${mentionPolls.length ? ` (found: ${mentionPolls.join(" | ")})` : ""}`
+  );
   assert(worker.includes("mentions_json"), "sqlite mentions_json");
   assert(worker.includes("mention_all"), "sqlite mention_all");
   assert(worker.includes("ALTER TABLE messages ADD COLUMN mentions_json"), "lazy upgrade");

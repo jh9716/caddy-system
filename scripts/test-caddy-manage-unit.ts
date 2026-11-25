@@ -30,6 +30,12 @@ import {
   shouldPersistAsDriving,
 } from "../src/lib/caddyManage";
 import { caddyCreateSchema, caddyUpdateSchema } from "../src/lib/caddySchema";
+import {
+  buildAdminOpsDashboard,
+  countActiveRoster,
+  countExistingReasons,
+  groupCaddiesByPrimaryTeam,
+} from "../src/lib/adminOpsDashboard";
 
 let passed = 0;
 let failed = 0;
@@ -979,14 +985,89 @@ console.log("== 총원 excludes RETIRED (source) ==");
         .includes("countsTowardRosterHeadcount(r.employmentStatus)"),
     "한눈에 조별/드라이빙 총원 excludes RETIRED"
   );
+  // 대시보드 V2 (c97e06d): /manage 는 ManageOpsWorkspace → AdminOpsDashboard.
+  // KPI·조별 총원은 src/lib/adminOpsDashboard(.FastPath) 에서 계산한다.
+  const dashUi = fs.readFileSync(
+    path.resolve("src/components/manage/AdminOpsDashboard.tsx"),
+    "utf8"
+  );
+  const dashLib = fs.readFileSync(path.resolve("src/lib/adminOpsDashboard.ts"), "utf8");
+  const dashFast = fs.readFileSync(
+    path.resolve("src/lib/adminOpsDashboardFastPath.ts"),
+    "utf8"
+  );
+  const dashRow = (
+    id: number,
+    team: string,
+    employmentStatus: string,
+    caddyType: "HOUSE" | "THIRD" = "HOUSE"
+  ) => ({
+    id,
+    name: `C${id}`,
+    team,
+    teamOrder: id,
+    caddyType,
+    extraFlags: [],
+    employmentStatus,
+    bucket: "available" as const,
+    excludedReasons: [] as string[],
+    specialTags: [] as string[],
+    assignmentLabels: [] as string[],
+  });
+  const kpi = countActiveRoster([
+    dashRow(1, "1조", "ACTIVE"),
+    dashRow(2, "1조", "ACTIVE", "THIRD"),
+    dashRow(3, "1조", "LEAVE"),
+    dashRow(4, "1조", "RETIRED"),
+  ]);
   assert(
-    /employmentStatus:\s*\{\s*in:\s*\["ACTIVE",\s*"LEAVE"\]\s*\}/.test(dash),
+    kpi.activeCount === 2 &&
+      kpi.houseCount === 1 &&
+      kpi.thirdCount === 1 &&
+      dash.includes("ManageOpsWorkspace") &&
+      /label="재직 캐디"/.test(dashUi) &&
+      /data\?\.roster\.activeCount/.test(dashUi) &&
+      /roster:\s*countActiveRoster\(rows\)/.test(dashLib) &&
+      /roster:\s*countActiveRoster\(visible\)/.test(dashFast) &&
+      /const visible = caddies\.filter\(\s*\(row\) => normalizeEmploymentStatus\(row\.employmentStatus\) !== "RETIRED"\s*\)/.test(
+        dashFast
+      ),
     "dashboard 총 캐디 KPI excludes RETIRED"
   );
-  assert(
-    dash.includes('if (st === "ACTIVE" || st === "LEAVE") bucket.total += 1'),
-    "dashboard 한눈에 조별 총원 excludes RETIRED"
-  );
+  {
+    const rows = [
+      dashRow(11, "1조", "ACTIVE"),
+      dashRow(12, "1조", "LEAVE"),
+      dashRow(13, "1조", "RETIRED"),
+      dashRow(21, "2조", "RETIRED"),
+    ];
+    const built = buildAdminOpsDashboard({
+      date: "2026-11-25",
+      availability: {
+        available: { all: rows },
+        special: [],
+        excluded: [],
+        dailySummary: { finalAvailable: rows.length },
+        counts: { byType: { HOUSE: rows.length, THIRD: 0, DRIVING: 0 } },
+      } as never,
+    });
+    const groups = groupCaddiesByPrimaryTeam(built.caddies);
+    const t1 = groups.find((g) => g.team === "1조");
+    const t2 = groups.find((g) => g.team === "2조");
+    assert(
+      built.caddies.every((c) => c.id !== 13 && c.id !== 21) &&
+        t1?.rows.map((r) => r.id).join(",") === "11,12" &&
+        t2?.rows.length === 0 &&
+        /const rosterRows = rows\.filter\(\s*\(row\) => normalizeEmploymentStatus\(row\.employmentStatus\) !== "RETIRED"\s*\)/.test(
+          dashLib
+        ) &&
+        /caddies:\s*visible\.map\(/.test(dashFast) &&
+        /groupCaddiesByPrimaryTeam\(visible\)/.test(dashUi) &&
+        /filterDashboardCaddies\(data\.caddies, query\)/.test(dashUi) &&
+        /dash-team-col-count">\{group\.rows\.length\}/.test(dashUi),
+      "dashboard 한눈에 조별 총원 excludes RETIRED"
+    );
+  }
   assert(
     !fs.existsSync(path.resolve("src/app/api/caddies/[id]/hard-delete/route.ts")),
     "no generic hard-delete API added"
@@ -1021,8 +1102,9 @@ console.log("== caddies roster board UI source ==");
     "RETIRED hidden from default roster"
   );
   assert(
-    /leave \? \(\s*<span className="cm-leave-badge">휴직<\/span>/.test(src) ||
-      /cm-leave-badge">휴직/.test(src),
+    /\{leave \? \(\s*<span className="cm-leave-badge"(?: title="휴직")?>\s*휴직\s*<\/span>\s*\) : null\}/.test(
+      src
+    ),
     "LEAVE keeps slot with 휴직 badge"
   );
   assert(
@@ -1032,7 +1114,12 @@ console.log("== caddies roster board UI source ==");
       />\s*휴직\s*</.test(sheetBlock) &&
       /드라이빙 전환/.test(sheetBlock) &&
       />\s*삭제\s*</.test(sheetBlock) &&
-      />\s*복귀\s*</.test(sheetBlock),
+      /leave \? \(\s*<button[\s\S]*?setEmployment\(c, 'ACTIVE'\)[\s\S]*?>\s*복직\s*</.test(
+        sheetBlock
+      ) &&
+      /\) : \(\s*<button[\s\S]*?setEmployment\(c, 'LEAVE'\)[\s\S]*?>\s*휴직\s*</.test(
+        sheetBlock
+      ),
     "name click opens status-aware manage menu"
   );
   assert(
@@ -1134,14 +1221,29 @@ console.log("== caddy delete UX (soft-retire, 삭제/삭제됨/복귀) ==");
       ),
     "delete confirm uses simple 명단 삭제 copy"
   );
+  // '퇴사' 문구는 (1) Excel 가져오기 V2 영역과 (2) 메뉴 삭제 패널(퇴사 처리 = RETIRED PATCH)
+  // 에서만 허용. 그 밖의 화면에는 계속 노출 금지. 영구삭제/soft delete/FK 는 어디에도 금지.
+  const xlsxStart = src.indexOf('aria-label="Excel 가져오기 V2"');
+  const xlsxEnd = xlsxStart >= 0 ? src.indexOf("</section>", xlsxStart) : -1;
+  const xlsxBlock = xlsxStart >= 0 && xlsxEnd > xlsxStart ? src.slice(xlsxStart, xlsxEnd) : "";
+  const delStart = src.indexOf("if (menuPanel === 'delete') {");
+  const delEnd = delStart >= 0 ? src.indexOf("{back}", delStart) : -1;
+  const deleteBlock = delStart >= 0 && delEnd > delStart ? src.slice(delStart, delEnd) : "";
+  const outsideAllowed = src
+    .replace(xlsxBlock || "\u0000never", "")
+    .replace(deleteBlock || "\u0000never", "");
   assert(
-    !src.includes("퇴사") &&
+    xlsxBlock.length > 0 &&
+      deleteBlock.length > 0 &&
+      /setEmployment\(c, 'RETIRED'\)/.test(deleteBlock) &&
+      /삭제\(퇴사 처리\)/.test(deleteBlock) &&
+      !outsideAllowed.includes("퇴사") &&
       !src.includes("영구삭제") &&
       !src.includes("영구 삭제") &&
       !src.includes("soft delete") &&
       !src.includes("soft-delete") &&
       !src.includes("FK"),
-    "caddies page does not expose 퇴사/영구삭제/soft delete"
+    "caddies page does not expose 퇴사/영구삭제/soft delete (퇴사 only in XLSX V2 + 삭제(퇴사 처리) panel)"
   );
   assert(
     /\['RETIRED', '삭제됨'\]/.test(src) &&
@@ -1166,19 +1268,35 @@ console.log("== caddy delete UX (soft-retire, 삭제/삭제됨/복귀) ==");
     "삭제됨 상세 목록 hides slot/driving actions"
   );
   assert(
-    /leave \? \(\s*<button[\s\S]*?복귀/.test(sheetBlock) &&
-      !/st === 'RETIRED'[\s\S]{0,200}복귀/.test(sheetBlock),
-    "default roster 복귀 is LEAVE only, not deleted caddies"
+    /leave \? \(\s*<button[\s\S]*?setEmployment\(c, 'ACTIVE'\)[\s\S]*?복직/.test(sheetBlock) &&
+      !/st === 'RETIRED'[\s\S]{0,200}(복귀|복직)/.test(sheetBlock) &&
+      !/>\s*복귀\s*</.test(sheetBlock),
+    "default roster 복직 is LEAVE only, not deleted caddies"
   );
   assert(
     /normalizeEmploymentStatus\(r\.employmentStatus\) !== ["']RETIRED["']/.test(
       fs.readFileSync(path.resolve("src/lib/caddyRosterBoard.ts"), "utf8")
-    ) && /cm-leave-badge">휴직/.test(src),
+    ) && /cm-leave-badge"(?: title="휴직")?>\s*휴직/.test(src),
     "RETIRED hidden from roster; LEAVE stays as 휴직"
   );
+  // 대시보드 V2 는 퇴사(RETIRED) 인원 수·툴팁 자체를 노출하지 않는다 (삭제됨 = 화면에서 제외).
+  const dashUiV2 = fs.readFileSync(
+    path.resolve("src/components/manage/AdminOpsDashboard.tsx"),
+    "utf8"
+  );
+  const retiredReasons = countExistingReasons([
+    { excludedReasons: ["퇴사(RETIRED)"] },
+    { excludedReasons: ["퇴사", "휴무"] },
+    { excludedReasons: ["RETIRED"] },
+  ]);
   assert(
-    dash.includes('title="삭제됨"') && !dash.includes('title="퇴사"'),
-    "dashboard retired count tooltip is 삭제됨"
+    retiredReasons.length === 1 &&
+      retiredReasons[0].reason === "휴무" &&
+      retiredReasons[0].count === 1 &&
+      !dash.includes('title="퇴사"') &&
+      !dashUiV2.includes("퇴사") &&
+      !/RETIRED/.test(dashUiV2),
+    "dashboard does not surface 퇴사 count/tooltip (retired = 삭제됨, hidden)"
   );
   assert(
     idRoute.includes("requireAdmin") &&

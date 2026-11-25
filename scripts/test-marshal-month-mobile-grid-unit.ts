@@ -311,8 +311,34 @@ section("source contracts");
   assert(page.includes('data-marshal-schedule="calendar"'), "PC 달력 유지");
   assert(page.includes("renderDayDetail(row.board"), "모바일 행 → 기존 일자 상세(교체) 재사용");
   assert(comp.includes('data-marshal-schedule="dense"'), "모바일 그리드 마커");
-  const xg = css.slice(css.indexOf("마샬 월표 모바일 엑셀형"));
-  assert(!/ellipsis/.test(xg), "그리드 CSS 말줄임 없음");
+  // 마샬 월표 CSS 구역만 검사: "마샬 월표" 섹션 헤더(P1 그리드, P2 개선)부터
+  // 다음 비-마샬 섹션 헤더 직전까지. 뒤에 붙는 다른 화면 CSS(#330 플로팅 채팅 등)는 제외.
+  const SECTION_HEADER = /^\/\* (?:-{3,}|={3,}|———)[^\n]*$/gm;
+  const headers = [...css.matchAll(SECTION_HEADER)].map((m) => ({
+    index: m.index ?? 0,
+    text: m[0],
+  }));
+  const startIdx = headers.findIndex((h) => h.text.includes("마샬 월표 모바일 엑셀형"));
+  let marshalBlock = "";
+  if (startIdx >= 0) {
+    let endIdx = startIdx + 1;
+    while (endIdx < headers.length && headers[endIdx].text.includes("마샬 월표")) endIdx++;
+    const end = endIdx < headers.length ? headers[endIdx].index : css.length;
+    marshalBlock = css.slice(headers[startIdx].index, end);
+  }
+  assert(
+    startIdx >= 0 &&
+      /\.ms-xg\s*\{/.test(marshalBlock) &&
+      /\.ms-xg-row/.test(marshalBlock) &&
+      /\.ms-xg-entry/.test(marshalBlock),
+    "마샬 월표 CSS 구역을 찾음 (못 찾으면 실패)"
+  );
+  assert(!/ellipsis/.test(marshalBlock), "그리드 CSS 말줄임 없음");
+  // 구역 밖으로 옮겨진 .ms-xg 규칙도 말줄임 금지 (위치와 무관하게 그리드 자체를 보호).
+  const xgRulesWithEllipsis = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(
+    (m) => /\.ms-xg\b/.test(m[1]) && /ellipsis/.test(m[2])
+  );
+  assert(xgRulesWithEllipsis.length === 0, "globals.css 어디서든 .ms-xg 규칙 말줄임 없음");
   assert(!/fetch\(/.test(comp), "그리드 컴포넌트는 새 API 호출 없음");
   assert(comp.includes("marshalDayFlagBadges(row.board, occurrenceCalendarBadgeText)"), "그리드가 DayFlags 동일 헬퍼 사용");
   assert(comp.includes("벌당 근무 배정"), "벌 태그 스크린리더 문구 = 벌당 근무 배정");
