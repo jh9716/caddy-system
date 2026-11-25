@@ -119,7 +119,6 @@ export default function NoticePublishWindowFields({
           {result.message}
         </p>
       )}
-      <p className="notice-publish-note">한국 시간 기준입니다.</p>
     </fieldset>
   )
 }

@@ -2967,8 +2967,7 @@ html.vh-chat-open .vh-work-inner,
 }
 
 .notice-publish-summary,
-.notice-publish-error,
-.notice-publish-note {
+.notice-publish-error {
   margin: 0;
   font-size: 13px;
   line-height: 1.45;
@@ -2982,11 +2981,6 @@ html.vh-chat-open .vh-work-inner,
 .notice-publish-error {
   color: var(--vh-danger, #b42318);
   font-weight: 600;
-}
-
-.notice-publish-note {
-  color: var(--vh-ink-soft);
-  font-size: 12px;
 }
 
 .notice-publish-inputs.is-scheduled {
