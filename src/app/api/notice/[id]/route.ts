@@ -24,6 +24,7 @@ import {
 } from "@/lib/noticeFile";
 import {
   NoticeValidationError,
+  assertNoticePublishOrder,
   canViewNotice,
   parseNoticeWriteBody,
 } from "@/lib/noticeTarget";
@@ -93,6 +94,20 @@ export async function PATCH(
   const body = await req.json().catch(() => ({}));
   try {
     const parsed = parseNoticeWriteBody(body, "update");
+    // 시작·종료 중 한쪽만 바꾸면 남은 기존 값과 비교한다.
+    if ((parsed.publishStartAt === undefined) !== (parsed.publishEndAt === undefined)) {
+      const existing = await prisma.notice.findUnique({
+        where: { id },
+        select: { publishStartAt: true, publishEndAt: true },
+      });
+      if (!existing) {
+        return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
+      assertNoticePublishOrder(
+        parsed.publishStartAt !== undefined ? parsed.publishStartAt : existing.publishStartAt,
+        parsed.publishEndAt !== undefined ? parsed.publishEndAt : existing.publishEndAt
+      );
+    }
     const data: {
       title?: string;
       content?: string;
