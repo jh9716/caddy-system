@@ -2702,43 +2702,6 @@ html.vh-chat-open .vh-work-inner,
   opacity: 1;
 }
 
-.notice-photos-lightbox {
-  position: fixed;
-  inset: 0;
-  z-index: 80;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px;
-  background: rgba(15, 31, 24, 0.82);
-  border: 0;
-}
-
-.notice-photos-lightbox-stage {
-  overflow: auto;
-  max-width: 100%;
-  max-height: 90vh;
-  width: min(100%, 960px);
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-x pan-y pinch-zoom;
-}
-
-.notice-photos-lightbox img {
-  display: block;
-  max-width: none;
-  max-height: none;
-  width: 100%;
-  height: auto;
-  object-fit: contain;
-  border-radius: 8px;
-  opacity: 0;
-  transition: opacity 180ms ease-out;
-}
-
-.notice-photos-lightbox img.is-revealed {
-  opacity: 1;
-}
-
 .notice-files {
   margin-top: 16px;
 }
@@ -7508,6 +7471,9 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 }
 .free-board-sheet-link {
   display: block;
+  width: 100%;
+  padding: 0;
+  cursor: zoom-in;
   border: 1px solid var(--vh-border);
   border-radius: var(--vh-radius-sm);
   overflow: hidden;
@@ -7783,6 +7749,9 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
 }
 .talk-photo {
   display: block;
+  width: 100%;
+  padding: 0;
+  cursor: zoom-in;
   border-radius: var(--vh-radius-sm);
   overflow: hidden;
   border: 1px solid var(--vh-border);
@@ -7794,6 +7763,14 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
   height: auto;
   max-height: 80vh;
   object-fit: contain;
+}
+.talk-photo-item {
+  margin: 0;
+}
+.talk-photo-caption {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--vh-ink-soft);
 }
 .talk-actions {
   display: flex;
@@ -7825,4 +7802,54 @@ body.manage-mode .vh-work-inner:has(.privacy-page) {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+}
+
+/* 공지·가배치표·자유게시판 공용 사진 확대 뷰어 (PhotoZoomViewer) */
+.vh-photo-zoom {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(10, 18, 16, 0.92);
+  touch-action: none;
+  overscroll-behavior: contain;
+  overflow: hidden;
+}
+
+.vh-photo-zoom-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.vh-photo-zoom-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  transform-origin: center center;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
+}
+
+.vh-photo-zoom-close {
+  position: absolute;
+  z-index: 2;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  right: 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+  color: #163028;
+  font-weight: 800;
+  padding: 8px 12px;
 }

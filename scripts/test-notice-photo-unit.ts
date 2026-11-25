@@ -733,7 +733,7 @@ async function main() {
       );
       assert(gallery.includes("notice-photos-list"), "detail gallery uses uncropped list");
       assert(gallery.includes("notice-photos-item"), "detail gallery item class");
-      assert(gallery.includes("notice-photos-lightbox"), "detail lightbox is notice-scoped");
+      assert(gallery.includes("PhotoZoomViewer"), "detail opens shared zoom viewer");
       assert(!gallery.includes("course-report-photo-grid"), "detail does not reuse cropped report grid");
       assert(!gallery.includes("course-report-photo-thumb"), "detail does not reuse cropped report thumb");
       assert(!gallery.includes("course-report-photo-lightbox"), "detail lightbox not report lightbox");
@@ -751,9 +751,9 @@ async function main() {
           css.includes("object-fit: cover"),
         "course-report thumbs still crop/cover"
       );
-      const lightboxCss = noticePhotoCss.slice(noticePhotoCss.indexOf(".notice-photos-lightbox img"));
+      const lightboxCss = css.slice(css.indexOf(".vh-photo-zoom-stage img"));
       assert(lightboxCss.includes("object-fit: contain"), "lightbox contain");
-      assert(noticePhotoCss.includes("max-height: 90vh"), "lightbox stage fits viewport");
+      assert(lightboxCss.includes("max-height: 100%"), "lightbox stage fits viewport");
       assert(lightboxCss.includes("height: auto"), "lightbox keeps ratio");
       assert(!/include:\s*\{\s*photos:/.test(apiOne), "GET detail does not include photos on Notice");
       assert(!/include:\s*\{\s*photos:/.test(rscDetail), "RSC detail does not include photos on Notice");

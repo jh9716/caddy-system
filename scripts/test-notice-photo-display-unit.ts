@@ -40,7 +40,7 @@ section("detail gallery is uncropped");
   const noticeCss = sliceCss(css, ".notice-photos {", ".notice-back {");
   assert(gallery.includes("notice-photos-list"), "stacked list");
   assert(gallery.includes("notice-photos-item"), "full-width item");
-  assert(gallery.includes("notice-photos-lightbox"), "notice lightbox");
+  assert(gallery.includes("PhotoZoomViewer"), "notice zoom viewer");
   assert(gallery.includes("RevealedPhoto"), "uses decode-then-reveal img");
   assert(!gallery.includes("course-report-photo-"), "does not reuse report crop classes");
   assert(!gallery.includes('object-fit: "cover"'), "component has no cover");
@@ -49,23 +49,22 @@ section("detail gallery is uncropped");
   assert(/\.notice-photos-item img\s*\{[^}]*object-fit:\s*contain/.test(noticeCss), "img contain");
   assert(!/\.notice-photos-item\s*\{[^}]*aspect-ratio:/.test(noticeCss), "no fake reserved ratio");
   assert(!noticeCss.includes("object-fit: cover"), "no cover crop");
-  assert(!noticeCss.includes("max-height:") || noticeCss.includes(".notice-photos-lightbox"), "detail list has no max-height crop");
+  assert(!noticeCss.includes("max-height:"), "detail list has no max-height crop");
 }
 
 section("lightbox contain, no new viewer");
 {
   const gallery = read("src/components/notice/NoticePhotoGallery.tsx");
   const css = read("src/app/globals.css");
-  const noticeCss = sliceCss(css, ".notice-photos {", ".notice-back {");
+  const viewerCss = sliceCss(css, ".vh-photo-zoom {", ".vh-photo-zoom-close {");
   assert(gallery.includes("setOpenId"), "keeps existing click-to-open lightbox");
   assert(!gallery.includes("react-image-lightbox"), "no new viewer lib");
-  assert(gallery.includes("notice-photos-lightbox-stage"), "scrollable original-size stage");
-  assert(/\.notice-photos-lightbox-stage\s*\{[^}]*max-height:\s*90vh/.test(noticeCss), "stage fits screen");
-  assert(/\.notice-photos-lightbox-stage\s*\{[^}]*overflow:\s*auto/.test(noticeCss), "stage scrolls");
-  assert(/\.notice-photos-lightbox img\s*\{[^}]*object-fit:\s*contain/.test(noticeCss), "lightbox contain");
-  assert(/\.notice-photos-lightbox img\s*\{[^}]*width:\s*100%/.test(noticeCss), "lightbox width 100%");
-  assert(/\.notice-photos-lightbox img\s*\{[^}]*height:\s*auto/.test(noticeCss), "lightbox height auto");
-  assert(/\.notice-photos-lightbox img\s*\{[^}]*max-height:\s*none/.test(noticeCss), "lightbox img not capped");
+  assert(gallery.includes("<PhotoZoomViewer"), "shared in-page zoom viewer");
+  assert(/\.vh-photo-zoom-stage img\s*\{[^}]*max-height:\s*100%/.test(viewerCss), "image fits screen");
+  assert(/\.vh-photo-zoom-stage img\s*\{[^}]*max-width:\s*100%/.test(viewerCss), "image fits width");
+  assert(/\.vh-photo-zoom-stage img\s*\{[^}]*object-fit:\s*contain/.test(viewerCss), "lightbox contain");
+  assert(/\.vh-photo-zoom-stage img\s*\{[^}]*height:\s*auto/.test(viewerCss), "lightbox height auto");
+  assert(/\.vh-photo-zoom\s*\{[^}]*touch-action:\s*none/.test(viewerCss), "viewer handles pinch itself");
 }
 
 section("notice form composer thumbs are visible");

@@ -225,6 +225,7 @@
     "test:fcm-http-v1-unit": "bash scripts/tsx-safe.sh scripts/test-fcm-http-v1-unit.ts",
     "test:play-review-accounts-unit": "bash scripts/tsx-safe.sh scripts/test-play-review-accounts-unit.ts",
     "test:notice-photo-unit": "bash scripts/tsx-safe.sh scripts/test-notice-photo-unit.ts",
+    "test:photo-zoom-viewer-unit": "bash scripts/tsx-safe.sh scripts/test-photo-zoom-viewer-unit.ts",
     "test:notice-photo-display-unit": "bash scripts/tsx-safe.sh scripts/test-notice-photo-display-unit.ts",
     "test:notice-photo-prepare-unit": "bash scripts/tsx-safe.sh scripts/test-notice-photo-prepare-unit.ts",
     "test:notice-clipboard-paste-unit": "bash scripts/tsx-safe.sh scripts/test-notice-clipboard-paste-unit.ts",
