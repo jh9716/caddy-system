@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import PhotoZoomViewer from "@/components/photo/PhotoZoomViewer";
 import { RevealedPhoto } from "@/components/photo/RevealedPhoto";
 import type { NoticePhotoPublic } from "@/lib/noticePhotoConstants";
 import { noticePhotoSrc } from "@/lib/noticePhotoConstants";
@@ -25,6 +26,7 @@ export default function NoticePhotoGallery({
             type="button"
             className="notice-photos-item"
             onClick={() => setOpenId(photo.id)}
+            aria-label={`사진 ${index + 1} 크게 보기`}
           >
             <RevealedPhoto
               src={noticePhotoSrc(noticeId, photo.id)}
@@ -35,16 +37,11 @@ export default function NoticePhotoGallery({
         ))}
       </div>
       {open ? (
-        <button
-          type="button"
-          className="notice-photos-lightbox"
-          onClick={() => setOpenId(null)}
-          aria-label="닫기"
-        >
-          <span className="notice-photos-lightbox-stage">
-            <RevealedPhoto src={noticePhotoSrc(noticeId, open.id)} />
-          </span>
-        </button>
+        <PhotoZoomViewer
+          src={noticePhotoSrc(noticeId, open.id)}
+          alt="공지 사진"
+          onClose={() => setOpenId(null)}
+        />
       ) : null}
     </div>
   );
